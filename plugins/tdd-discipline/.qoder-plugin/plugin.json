@@ -1,0 +1,14 @@
+{
+  "name": "tdd-discipline",
+  "displayName": "测试驱动开发纪律（TDD）",
+  "version": "0.1.0",
+  "description": "Enforces strict red-green-refactor TDD: no production code without a failing test first.",
+  "descriptionZh": "强制 RED-GREEN-REFACTOR 的 TDD 纪律：没有失败的测试，就不写实现代码。",
+  "author": { "name": "Jesse Vincent (obra)" },
+  "homepage": "https://github.com/obra/superpowers/blob/main/skills/test-driven-development/SKILL.md",
+  "repository": "https://github.com/obra/superpowers",
+  "keywords": ["qoder-plugin", "skill", "tdd", "testing"],
+  "category": "developer-tools",
+  "tags": ["skill", "tdd"],
+  "skills": "./skills/"
+}

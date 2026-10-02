@@ -1,0 +1,12 @@
+node_modules
+dist
+out
+release
+.DS_Store
+.eslintcache
+*.log*
+
+# 本地生成物（工具产出，只提交源码与手写文档）
+.kb/
+docs/wiki/
+plugins/repo-wiki/

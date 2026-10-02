@@ -1,0 +1,14 @@
+{
+  "name": "systematic-debugging-discipline",
+  "displayName": "系统化调试纪律",
+  "version": "0.1.0",
+  "description": "Forces root-cause investigation before any fix; no guessing, no symptom patches.",
+  "descriptionZh": "在提出任何修复前强制进行根因调查：禁止猜测，禁止只补症状。",
+  "author": { "name": "Jesse Vincent (obra)" },
+  "homepage": "https://github.com/obra/superpowers/blob/main/skills/systematic-debugging/SKILL.md",
+  "repository": "https://github.com/obra/superpowers",
+  "keywords": ["qoder-plugin", "skill", "debugging", "root-cause"],
+  "category": "developer-tools",
+  "tags": ["skill", "debugging"],
+  "skills": "./skills/"
+}

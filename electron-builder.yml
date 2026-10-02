@@ -1,0 +1,63 @@
+appId: com.king.bluebuddy
+productName: BlueBuddy
+directories:
+  buildResources: build
+  output: release
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  # 生成类目录与本地文档绝不进安装包（源码隐私约定）
+  - '!.kb/**'
+  - '!docs/**'
+  - '!plugins/**'
+  - '!release/**'
+  - '!**/*.spec.{ts,tsx,js,cjs,mjs}'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+# 关闭 asar：实测本机（Defender 实时扫描 + 非 ASCII 中文路径）下 asar 归档会导致
+# Electron 在加载用户 JS 前的原生引导阶段静默中止；明文 resources/app/ 则正常启动。
+# 私有/个人分发不依赖 asar 的结构隐藏收益，冷启动开销可忽略。
+asar: false
+asarUnpack:
+  - resources/**
+  # better-sqlite3 v13 用 prebuilds/ 里的原生 .node，asar 内无法直接加载，必须解包到磁盘
+  - node_modules/better-sqlite3/prebuilds/**
+win:
+  executableName: BlueBuddy
+nsis:
+  artifactName: ${productName}-${version}-setup.${ext}
+  shortcutName: ${productName}
+  uninstallDisplayName: ${productName}
+  createDesktopShortcut: always
+  # 装到用户目录，不要求管理员权限（私有化/个人分发友好）
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  perMachine: false
+mac:
+  entitlementsInherit: build/entitlements.mac.plist
+  extendInfo:
+    - NSCameraUsageDescription: Application requests access to the device's camera.
+    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
+    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
+    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+  notarize: false
+dmg:
+  artifactName: ${name}-${version}.${ext}
+linux:
+  target:
+    - AppImage
+    - snap
+    - deb
+  maintainer: jinzhenglei
+  category: Utility
+appImage:
+  artifactName: ${name}-${version}.${ext}
+npmRebuild: false
+# 自动更新源（Stage 7 消费）：发布时 electron-builder 把 exe+latest.yml 传到此仓库的 Release
+# 换仓库或改名要同步改这里，否则已装应用永久接不到更新
+publish:
+  provider: github
+  owner: jinzhenglei
+  repo: bluebuddy
