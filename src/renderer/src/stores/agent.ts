@@ -16,7 +16,13 @@ interface AgentState {
 
   loadSessions(): Promise<void>
   selectSession(id: string | null): Promise<void>
-  createSession(input: { title: string; workDir: string; providerId: string }): Promise<SessionInfo>
+  createSession(input: {
+    title: string
+    workDir: string
+    providerId: string
+    /** 归属项目空间；不传为未归类任务 */
+    projectId?: string
+  }): Promise<SessionInfo>
   deleteSession(id: string): Promise<void>
   send(text: string): Promise<void>
   cancel(): Promise<void>

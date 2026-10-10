@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { HomePage } from '@renderer/pages/Home'
 import { ChatPage } from '@renderer/pages/Chat'
+import { ProjectsPage } from '@renderer/pages/Projects'
+import { ProjectDetailPage } from '@renderer/pages/ProjectDetail'
 import { SkillsPage } from '@renderer/pages/Skills'
 import { McpPage } from '@renderer/pages/Mcp'
 import { SettingsPage } from '@renderer/pages/Settings'
@@ -11,7 +13,7 @@ import { useAgentStore } from '@renderer/stores/agent'
 import { useSettingsStore } from '@renderer/stores/settings'
 import { useSkillsStore } from '@renderer/stores/skills'
 
-type View = 'home' | 'chat' | 'skills' | 'mcp' | 'settings'
+type View = 'home' | 'chat' | 'skills' | 'mcp' | 'settings' | 'projects' | 'project'
 
 /** 与 package.json version 同步维护 */
 const APP_VERSION = '0.1.0'
@@ -76,6 +78,27 @@ function IconPlug(): React.JSX.Element {
     <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
       <path
         d="M7.2 3v4M12.8 3v4M5.5 7h9v2.5a4.5 4.5 0 0 1-9 0V7Zm4.5 9.5V13"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+/** 项目空间导航图标：文件夹叠影 */
+function IconSpaces(): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 20 20" fill="none" className="h-4 w-4">
+      <path
+        d="M2.5 6.5h6l1.4 1.9h7.6v7.1h-15v-9Z"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5 4.6h4.2l1.4 1.6"
         stroke="currentColor"
         strokeWidth="1.3"
         strokeLinecap="round"
@@ -164,6 +187,8 @@ function App(): React.JSX.Element {
   // 默认落在新建任务页（WorkBuddy 首屏）；点侧边栏任务才进对话视图
   const [view, setView] = useState<View>('home')
   const [query, setQuery] = useState('')
+  // 当前打开详情的项目空间（null 表示只在列表页）
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
   // 左下角用户菜单与关于/更新弹窗
   const [userMenu, setUserMenu] = useState(false)
   const [dialog, setDialog] = useState<'' | 'about' | 'update'>('')
@@ -216,6 +241,13 @@ function App(): React.JSX.Element {
     )
   }, [sessions, query])
 
+  /** 打开任一任务进对话视图（侧边栏与空间详情页共用） */
+  const openSession = (id: string): void => {
+    setView('chat')
+    // 空间详情页提问新建的会话已在 store 中激活，再 select 一次会把乐观显示的用户消息覆盖回库内快照
+    if (useAgentStore.getState().activeSessionId !== id) void selectSession(id)
+  }
+
   return (
     <div className="flex h-full bg-surface text-ink">
       {/* 左侧边栏：品牌区 + 导航行 + 任务列表（WorkBuddy 式纯文本行） */}
@@ -231,6 +263,12 @@ function App(): React.JSX.Element {
         <nav className="space-y-0.5 px-3 pt-4">
           <button className={navRowClass(view === 'home')} onClick={() => setView('home')}>
             <IconPlusCircle /> 新建任务
+          </button>
+          <button
+            className={navRowClass(view === 'projects' || view === 'project')}
+            onClick={() => setView('projects')}
+          >
+            <IconSpaces /> 项目空间
           </button>
           <button className={navRowClass(view === 'skills')} onClick={() => setView('skills')}>
             <IconPuzzle /> 技能
@@ -266,10 +304,7 @@ function App(): React.JSX.Element {
                 >
                   <button
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
-                    onClick={() => {
-                      setView('chat')
-                      void selectSession(s.id)
-                    }}
+                    onClick={() => openSession(s.id)}
                   >
                     {running ? (
                       <span
@@ -364,10 +399,26 @@ function App(): React.JSX.Element {
         </div>
       </aside>
 
-      {/* 中间主区域：新建任务 / 对话 / 技能 / 设置 */}
+      {/* 中间主区域：新建任务 / 对话 / 项目空间 / 技能 / 设置 */}
       <main className="min-w-0 flex-1 bg-surface">
         {view === 'home' && <HomePage onCreated={() => setView('chat')} />}
         {view === 'chat' && <ChatPage />}
+        {view === 'projects' && (
+          <ProjectsPage
+            onOpen={(id) => {
+              setActiveProjectId(id)
+              setView('project')
+            }}
+          />
+        )}
+        {view === 'project' && activeProjectId && (
+          <ProjectDetailPage
+            key={activeProjectId}
+            projectId={activeProjectId}
+            onBack={() => setView('projects')}
+            onOpenSession={openSession}
+          />
+        )}
         {view === 'skills' && <SkillsPage />}
         {view === 'mcp' && <McpPage />}
         {view === 'settings' && <SettingsPage />}
