@@ -58,7 +58,8 @@ function NewProjectDialog({
     const res = await create({
       name: name.trim(),
       workDir,
-      providerId: providerId || providers[0]?.id
+      // 「跟随应用默认」就是不给空间写默认模型：写死 providers[0] 会让用户改了应用默认后空间仍绑在旧模型上
+      ...(providerId ? { providerId } : {})
     })
     setBusy(false)
     if (!res.ok) {
