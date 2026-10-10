@@ -4,3 +4,8 @@ pnpm-lock.yaml
 LICENSE.md
 tsconfig.json
 tsconfig.*.json
+
+# 示例技能包与 Qoder 插件文档：不属于应用源码，不参与格式门禁
+# （它们的排版由各自生态的约定决定，改动会造出与功能无关的噪声 diff）
+examples/
+plugins/
