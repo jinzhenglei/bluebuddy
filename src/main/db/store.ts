@@ -3,13 +3,61 @@ import { randomUUID } from 'node:crypto'
 import type { ChatMessage, McpServerInfo, McpToolDoc, McpTransport, ToolCall } from '@shared/types'
 import type { ArtifactDraft } from '../tools/types'
 
-/** 一次会话（Session）：一个工作目录 + 一个模型 + 一串消息 */
+/** 一次会话（Session）：一个工作目录 + 一个模型 + 一串消息；projectId 为空表示未归类 */
 export interface Session {
   id: string
   title: string
   workDir: string
   providerId: string
   createdAt: number
+  /** 所属项目空间；NULL（未归类）读出为 undefined */
+  projectId?: string
+}
+
+/** 项目空间：绑定一个工作目录，空间内任务共用该目录与项目指令 */
+export interface Project {
+  id: string
+  name: string
+  workDir: string
+  /** 项目指令原文；未设置读出为 undefined，清空后为 '' */
+  instructions?: string
+  /** 空间默认模型；未设置读出为 undefined */
+  providerId?: string
+  createdAt: number
+}
+
+/** 空间下的产物（跨任务聚合），附带来源会话标题 */
+export interface ProjectArtifact extends StoredArtifact {
+  sessionTitle: string
+}
+
+/** sessions 表原始行（project_id 为 NULL），供 mapper 收窄 */
+type SessionRow = Omit<Session, 'projectId'> & { projectId: string | null }
+
+/** NULL 归一成 undefined，避免 null 泄漏到渲染层 */
+function toSession(r: SessionRow): Session {
+  const s: Session = {
+    id: r.id,
+    title: r.title,
+    workDir: r.workDir,
+    providerId: r.providerId,
+    createdAt: r.createdAt
+  }
+  if (r.projectId) s.projectId = r.projectId
+  return s
+}
+
+/** projects 表原始行 */
+type ProjectRow = Omit<Project, 'instructions' | 'providerId'> & {
+  instructions: string | null
+  providerId: string | null
+}
+
+function toProject(r: ProjectRow): Project {
+  const p: Project = { id: r.id, name: r.name, workDir: r.workDir, createdAt: r.createdAt }
+  if (r.instructions !== null) p.instructions = r.instructions
+  if (r.providerId) p.providerId = r.providerId
+  return p
 }
 
 /** 已入库的产物记录 */
@@ -30,7 +78,7 @@ export interface SkillRow {
   displayName?: string | null
 }
 
-const SCHEMA_VERSION = 8
+const SCHEMA_VERSION = 9
 
 /** 安全解析 mcp_servers.category（JSON 数组字符串）；脏数据/空值回退 undefined */
 function parseCategory(raw: string | null): string[] | undefined {
@@ -191,12 +239,35 @@ export class DbStore {
       `)
     }
 
+    if (current < 9) {
+      // v9：项目空间——一个空间绑定一个工作目录，空间内任务共用该目录。
+      // 删空间时 FK 把任务的 project_id 置 NULL（任务与产物全留），绝不碰磁盘文件。
+      this.db.exec(`
+        CREATE TABLE projects (
+          id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          work_dir TEXT NOT NULL,
+          instructions TEXT,
+          provider_id TEXT,
+          created_at INTEGER NOT NULL
+        );
+        ALTER TABLE sessions ADD COLUMN project_id TEXT
+          REFERENCES projects(id) ON DELETE SET NULL;
+        CREATE INDEX idx_sessions_project ON sessions(project_id, created_at);
+      `)
+    }
+
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`)
   }
 
   // ---------- sessions ----------
 
-  createSession(input: { title: string; workDir: string; providerId: string }): Session {
+  createSession(input: {
+    title: string
+    workDir: string
+    providerId: string
+    projectId?: string
+  }): Session {
     const s: Session = {
       id: randomUUID(),
       title: input.title,
@@ -204,32 +275,53 @@ export class DbStore {
       providerId: input.providerId,
       createdAt: Date.now()
     }
+    if (input.projectId) s.projectId = input.projectId
     this.db
       .prepare(
-        `INSERT INTO sessions (id, title, work_dir, provider_id, created_at)
-         VALUES (?, ?, ?, ?, ?)`
+        `INSERT INTO sessions (id, title, work_dir, provider_id, created_at, project_id)
+         VALUES (?, ?, ?, ?, ?, ?)`
       )
-      .run(s.id, s.title, s.workDir, s.providerId, s.createdAt)
+      .run(s.id, s.title, s.workDir, s.providerId, s.createdAt, s.projectId ?? null)
     return s
   }
 
   getSession(id: string): Session | undefined {
     const row = this.db
       .prepare(
-        `SELECT id, title, work_dir AS workDir, provider_id AS providerId, created_at AS createdAt
+        `SELECT id, title, work_dir AS workDir, provider_id AS providerId, created_at AS createdAt,
+                project_id AS projectId
          FROM sessions WHERE id = ?`
       )
-      .get(id) as Session | undefined
-    return row
+      .get(id) as SessionRow | undefined
+    return row && toSession(row)
   }
 
   listSessions(): Session[] {
-    return this.db
+    const rows = this.db
       .prepare(
-        `SELECT id, title, work_dir AS workDir, provider_id AS providerId, created_at AS createdAt
+        `SELECT id, title, work_dir AS workDir, provider_id AS providerId, created_at AS createdAt,
+                project_id AS projectId
          FROM sessions ORDER BY created_at DESC`
       )
-      .all() as Session[]
+      .all() as SessionRow[]
+    return rows.map(toSession)
+  }
+
+  /** 某个空间下的任务（新的在前） */
+  listSessionsByProject(projectId: string): Session[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, title, work_dir AS workDir, provider_id AS providerId, created_at AS createdAt,
+                project_id AS projectId
+         FROM sessions WHERE project_id = ? ORDER BY created_at DESC`
+      )
+      .all(projectId) as SessionRow[]
+    return rows.map(toSession)
+  }
+
+  /** 把已有会话归入（传 null 移出）某个空间；用于旧会话归类 */
+  updateSessionProject(sessionId: string, projectId: string | null): void {
+    this.db.prepare(`UPDATE sessions SET project_id = ? WHERE id = ?`).run(projectId, sessionId)
   }
 
   renameSession(id: string, title: string): void {
@@ -348,6 +440,133 @@ export class DbStore {
 
   deleteArtifact(id: string): void {
     this.db.prepare(`DELETE FROM artifacts WHERE id = ?`).run(id)
+  }
+
+  // ---------- projects（项目空间） ----------
+
+  createProject(input: {
+    name: string
+    workDir: string
+    instructions?: string
+    providerId?: string
+  }): Project {
+    const p: Project = {
+      id: randomUUID(),
+      name: input.name,
+      workDir: input.workDir,
+      createdAt: Date.now()
+    }
+    if (input.instructions !== undefined) p.instructions = input.instructions
+    if (input.providerId) p.providerId = input.providerId
+    this.db
+      .prepare(
+        `INSERT INTO projects (id, name, work_dir, instructions, provider_id, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      )
+      .run(p.id, p.name, p.workDir, p.instructions ?? null, p.providerId ?? null, p.createdAt)
+    return p
+  }
+
+  getProject(id: string): Project | undefined {
+    const row = this.db
+      .prepare(
+        `SELECT id, name, work_dir AS workDir, instructions, provider_id AS providerId,
+                created_at AS createdAt
+         FROM projects WHERE id = ?`
+      )
+      .get(id) as ProjectRow | undefined
+    return row && toProject(row)
+  }
+
+  /** 全部空间，新的在前 */
+  listProjects(): Project[] {
+    const rows = this.db
+      .prepare(
+        `SELECT id, name, work_dir AS workDir, instructions, provider_id AS providerId,
+                created_at AS createdAt
+         FROM projects ORDER BY created_at DESC, rowid DESC`
+      )
+      .all() as ProjectRow[]
+    return rows.map(toProject)
+  }
+
+  /** patch 语义：只改传入的字段，未传字段保持原值 */
+  updateProject(
+    id: string,
+    patch: { name?: string; instructions?: string; providerId?: string; workDir?: string }
+  ): Project | undefined {
+    const cols: string[] = []
+    const vals: (string | null)[] = []
+    if (patch.name !== undefined) {
+      cols.push('name = ?')
+      vals.push(patch.name)
+    }
+    if (patch.instructions !== undefined) {
+      cols.push('instructions = ?')
+      vals.push(patch.instructions)
+    }
+    if (patch.providerId !== undefined) {
+      cols.push('provider_id = ?')
+      vals.push(patch.providerId || null)
+    }
+    if (patch.workDir !== undefined) {
+      cols.push('work_dir = ?')
+      vals.push(patch.workDir)
+    }
+    if (cols.length) {
+      this.db.prepare(`UPDATE projects SET ${cols.join(', ')} WHERE id = ?`).run(...vals, id)
+    }
+    return this.getProject(id)
+  }
+
+  /** 删空间：任务转为未归类（FK SET NULL），消息/产物一概保留 */
+  deleteProject(id: string): void {
+    this.db.prepare(`DELETE FROM projects WHERE id = ?`).run(id)
+  }
+
+  /**
+   * 空间内跨任务产物：只取 file 类且有 relPath 的，按 relPath 去重保留最新一条，
+   * 结果新的在前（上限由调用方按 token 预算裁）。
+   */
+  listArtifactsByProject(projectId: string): ProjectArtifact[] {
+    const rows = this.db
+      .prepare(
+        `SELECT a.id AS id, a.session_id AS sessionId, a.call_id AS callId, a.kind AS kind,
+                a.name AS name, a.rel_path AS relPath, a.url AS url, a.created_at AS createdAt,
+                s.title AS sessionTitle
+         FROM artifacts a JOIN sessions s ON s.id = a.session_id
+         WHERE s.project_id = ? AND a.kind = 'file' AND a.rel_path IS NOT NULL AND a.rel_path <> ''
+         ORDER BY a.created_at DESC, a.rowid DESC`
+      )
+      .all(projectId) as Array<{
+      id: string
+      sessionId: string
+      callId: string
+      kind: ProjectArtifact['kind']
+      name: string
+      relPath: string | null
+      url: string | null
+      createdAt: number
+      sessionTitle: string
+    }>
+    const seen = new Set<string>()
+    const out: ProjectArtifact[] = []
+    for (const r of rows) {
+      const relPath = r.relPath ?? ''
+      if (seen.has(relPath)) continue
+      seen.add(relPath)
+      out.push({
+        id: r.id,
+        sessionId: r.sessionId,
+        callId: r.callId,
+        kind: r.kind,
+        name: r.name,
+        relPath,
+        createdAt: r.createdAt,
+        sessionTitle: r.sessionTitle
+      })
+    }
+    return out
   }
 
   // ---------- skills（Stage 4 技能管理） ----------
@@ -561,6 +780,7 @@ export class DbStore {
       DELETE FROM messages;
       DELETE FROM artifacts;
       DELETE FROM sessions;
+      DELETE FROM projects;
       DELETE FROM skills;
       DELETE FROM mcp_servers;
       DELETE FROM settings_kv;

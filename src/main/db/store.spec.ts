@@ -348,8 +348,16 @@ describe('DbStore messages', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-migrate-v6-'))
     const file = path.join(dir, 'db.sqlite')
     // 手工建 v5 结构：mcp_servers 无 display_name/hub_id，无 settings_kv
+    // （带上 sessions：真实 v5 库必有它，后续 v9 迁移要往它加 project_id）
     const raw = new Database(file)
     raw.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        work_dir TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
       CREATE TABLE mcp_servers (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
@@ -407,6 +415,13 @@ describe('DbStore messages', () => {
     // 手工建 v6 结构：mcp_servers 有 display_name/hub_id，但无 description/category/source_url/stars/call_volume
     const raw = new Database(file)
     raw.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        work_dir TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
       CREATE TABLE mcp_servers (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
@@ -472,6 +487,13 @@ describe('DbStore messages', () => {
     // 手工建 v7 结构：有市场元数据列，但无 readme/tools_doc/license/publisher/icon_url/updated_at/view_count
     const raw = new Database(file)
     raw.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        work_dir TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
       CREATE TABLE mcp_servers (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL UNIQUE,
@@ -634,6 +656,177 @@ describe('DbStore skills', () => {
     expect(store.listSkillRows()[0].enabled).toBe(false)
     store.deleteSkillRow('a')
     expect(store.listSkillRows()).toEqual([])
+  })
+})
+
+describe('DbStore projects（项目空间）', () => {
+  it('createProject 完整往返；listProjects 后建的在前', () => {
+    const p = store.createProject({ name: '蓝本', workDir: 'D:/spaces/blue' })
+    expect(p.id).toMatch(/^[0-9a-f-]{36}$/)
+    expect(p.createdAt).toBeGreaterThan(0)
+    expect(p.instructions).toBeUndefined()
+    expect(store.getProject(p.id)).toEqual(p)
+    const q = store.createProject({ name: '第二个', workDir: 'D:/b', instructions: '规范' })
+    expect(store.listProjects().map((x) => x.id)).toEqual([q.id, p.id])
+  })
+
+  it('updateProject 是 patch 语义：只改传入字段，未传字段保持原值', () => {
+    const p = store.createProject({
+      name: 'a',
+      workDir: '/w',
+      instructions: '原指令',
+      providerId: 'p1'
+    })
+    store.updateProject(p.id, { name: 'b' })
+    expect(store.getProject(p.id)).toMatchObject({
+      name: 'b',
+      instructions: '原指令',
+      providerId: 'p1'
+    })
+    store.updateProject(p.id, { instructions: '', workDir: '/w2' })
+    expect(store.getProject(p.id)).toMatchObject({ name: 'b', instructions: '', workDir: '/w2' })
+  })
+
+  it('createSession 可挂到空间下，listSessionsByProject 只返回该空间任务', () => {
+    const p = store.createProject({ name: 'a', workDir: '/w' })
+    const inSpace = store.createSession({
+      title: 't1',
+      workDir: '/w',
+      providerId: 'p',
+      projectId: p.id
+    })
+    store.createSession({ title: 't2', workDir: '/other', providerId: 'p' })
+    expect(inSpace.projectId).toBe(p.id)
+    expect(store.listSessionsByProject(p.id).map((s) => s.id)).toEqual([inSpace.id])
+    // 未归类会话不在空间列表里
+    expect(store.listSessions()).toHaveLength(2)
+  })
+
+  it('未知 projectId 上 createSession 因外键约束失败', () => {
+    expect(() =>
+      store.createSession({ title: 't', workDir: '/w', providerId: 'p', projectId: 'ghost' })
+    ).toThrow(/FOREIGN KEY constraint failed/)
+  })
+
+  it('deleteProject 只把任务转为未归类，任务与产物全部保留', () => {
+    const p = store.createProject({ name: 'a', workDir: '/w' })
+    const s = store.createSession({ title: 't', workDir: '/w', providerId: 'p', projectId: p.id })
+    store.registerArtifact(s.id, 'c1', { kind: 'file', name: 'a.md', relPath: 'a.md' })
+    store.deleteProject(p.id)
+    expect(store.getProject(p.id)).toBeUndefined()
+    expect(store.getSession(s.id)?.projectId).toBeUndefined()
+    expect(store.listArtifacts(s.id)).toHaveLength(1)
+  })
+
+  it('listArtifactsByProject 跨任务聚合，排除 link 与无路径项', () => {
+    const p = store.createProject({ name: 'a', workDir: '/w' })
+    const s1 = store.createSession({
+      title: '任务一',
+      workDir: '/w',
+      providerId: 'p',
+      projectId: p.id
+    })
+    const s2 = store.createSession({
+      title: '任务二',
+      workDir: '/w',
+      providerId: 'p',
+      projectId: p.id
+    })
+    const outside = store.createSession({ title: '局外', workDir: '/x', providerId: 'p' })
+    store.registerArtifact(s1.id, 'c1', { kind: 'file', name: '一.md', relPath: '一.md' })
+    store.registerArtifact(s2.id, 'c2', { kind: 'file', name: '二.md', relPath: '二.md' })
+    store.registerArtifact(s2.id, 'c3', { kind: 'link', name: '链', url: 'https://x' })
+    store.registerArtifact(outside.id, 'c4', { kind: 'file', name: '别.md', relPath: '别.md' })
+    const list = store.listArtifactsByProject(p.id)
+    expect(list.map((a) => a.name).sort()).toEqual(['一.md', '二.md'])
+    expect(list.every((a) => a.sessionTitle)).toBe(true)
+  })
+
+  it('同 relPath 只保留最新一条，删掉后旧条自动浮出', () => {
+    const p = store.createProject({ name: 'a', workDir: '/w' })
+    const s1 = store.createSession({
+      title: '旧任务',
+      workDir: '/w',
+      providerId: 'p',
+      projectId: p.id
+    })
+    const s2 = store.createSession({
+      title: '新任务',
+      workDir: '/w',
+      providerId: 'p',
+      projectId: p.id
+    })
+    store.registerArtifact(s1.id, 'c1', { kind: 'file', name: '旧名.md', relPath: 'docs/a.md' })
+    const newer = store.registerArtifact(s2.id, 'c2', {
+      kind: 'file',
+      name: '新名.md',
+      relPath: 'docs/a.md'
+    })
+    const list = store.listArtifactsByProject(p.id)
+    expect(list).toHaveLength(1)
+    expect(list[0].id).toBe(newer.id)
+    store.deleteArtifact(newer.id)
+    expect(store.listArtifactsByProject(p.id).map((a) => a.name)).toEqual(['旧名.md'])
+  })
+
+  it('旧 v8 库打开时自动迁移到 v9（projects 表与 project_id 列，旧数据不丢）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-migrate-v9-'))
+    const file = path.join(dir, 'db.sqlite')
+    const raw = new Database(file)
+    raw.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        work_dir TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE artifacts (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        call_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        rel_path TEXT,
+        url TEXT,
+        created_at INTEGER NOT NULL
+      );
+    `)
+    raw.pragma('user_version = 8')
+    raw.prepare(`INSERT INTO sessions VALUES ('s1', 'old', '/x', 'p', 1)`).run()
+    raw
+      .prepare(
+        `INSERT INTO artifacts VALUES ('a1', 's1', 'c1', 'file', '旧产物.md', '旧产物.md', NULL, 1)`
+      )
+      .run()
+    raw.close()
+
+    const upgraded = new DbStore(file)
+    try {
+      // 旧会话仍在，且未被归到任何空间
+      expect(upgraded.getSession('s1')?.title).toBe('old')
+      expect(upgraded.getSession('s1')?.projectId).toBeUndefined()
+      expect(upgraded.listProjects()).toEqual([])
+      // 新表可用，并能把旧会话收进空间
+      const p = upgraded.createProject({ name: '空间', workDir: '/x' })
+      upgraded.updateSessionProject('s1', p.id)
+      expect(upgraded.listSessionsByProject(p.id).map((s) => s.id)).toEqual(['s1'])
+      expect(upgraded.listArtifactsByProject(p.id).map((a) => a.name)).toEqual(['旧产物.md'])
+    } finally {
+      upgraded.close()
+    }
+  })
+
+  it('wipeAll 连 projects 一起清空', () => {
+    const p = store.createProject({ name: 'a', workDir: '/w' })
+    store.createSession({ title: 't', workDir: '/w', providerId: 'p', projectId: p.id })
+    store.wipeAll()
+    expect(store.listProjects()).toEqual([])
+    expect(store.listSessions()).toEqual([])
+    // 清空后仍可建空间与任务（未误删表）
+    const p2 = store.createProject({ name: 'b', workDir: '/w2' })
+    store.createSession({ title: 't2', workDir: '/w2', providerId: 'p', projectId: p2.id })
+    expect(store.listProjects()).toHaveLength(1)
   })
 })
 
