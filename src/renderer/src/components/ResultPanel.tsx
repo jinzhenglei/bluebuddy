@@ -49,7 +49,7 @@ export function ResultPanel({
 
   const loadDir = (rel: string): void => {
     setDirs((d) => (d[rel] ? d : { ...d, [rel]: { status: 'loading' } }))
-    void window.api.workspace.listDir(sessionId, rel).then((res) => {
+    void window.api.workspace.listDir({ sessionId }, rel).then((res) => {
       setDirs((d) => ({
         ...d,
         [rel]:
@@ -63,7 +63,7 @@ export function ResultPanel({
   /** 预览工作区文本文件；二进制/超大/读失败各自降级提示 */
   const openFile = (relPath: string, name: string): void => {
     setPreview({ title: name, content: null, note: '加载中…', openTarget: null })
-    void window.api.workspace.readFile(sessionId, relPath).then((r) => {
+    void window.api.workspace.readFile({ sessionId }, relPath).then((r) => {
       const base = workDir ? workDir.replace(/[/\\]+$/, '') : ''
       const openTarget = base ? { kind: 'path' as const, target: `${base}/${relPath}` } : null
       if (!r.ok) {

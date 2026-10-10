@@ -32,9 +32,16 @@ export const IPC_CHANNELS = {
   ShellOpenPath: 'shell:open-path',
   ShellOpenExternal: 'shell:open-external',
 
-  // 工作区只读浏览（右侧结果区文件 Tab）：沙箱根为会话 workDir，主进程侧把关
+  // 工作区只读浏览（右侧结果区文件 Tab / 空间资产 Tab）：沙箱根由选择器解析，主进程侧把关
   WorkspaceListDir: 'workspace:list-dir',
   WorkspaceReadFile: 'workspace:read-file',
+
+  // 项目空间：列表/新建/改/删/跨任务产物聚合
+  ProjectsList: 'projects:list',
+  ProjectsCreate: 'projects:create',
+  ProjectsUpdate: 'projects:update',
+  ProjectsDelete: 'projects:delete',
+  ProjectsArtifacts: 'projects:artifacts',
 
   // 技能管理（Stage 4）：列表/启停/删除/本地导入
   SkillsList: 'skills:list',

@@ -7,11 +7,14 @@ import { IPC_CHANNELS } from '@shared/ipc'
 import type {
   AgentStreamEvent,
   AppPrefs,
+  BrowseTarget,
   ChatMessage,
   IdeApp,
   IdeAppView,
   McpServerInfo,
   McpTransport,
+  ProjectCreateInput,
+  ProjectPatch,
   ProviderConfig,
   StreamEvent,
   ToolCall
@@ -23,6 +26,8 @@ import { ToolRegistry } from './tools/registry'
 import { ToolContext } from './tools/types'
 import { LocalWorkspace } from './workspace/local'
 import { listDir, readFilePreview } from './workspace/browse'
+import { resolveBrowseRoot } from './workspace/browse-root'
+import { buildProjectPromptSection } from './agent/project-prompt'
 import { SkillRegistry } from './skills/registry'
 import { SkillManager } from './skills/manager'
 import { HubClient } from './skills/hub'
@@ -188,7 +193,8 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   ipcMain.handle(IPC_CHANNELS.SessionsList, (): Session[] => db.listSessions())
   ipcMain.handle(
     IPC_CHANNELS.SessionsCreate,
-    (_e, input: { title: string; workDir: string; providerId: string }) => db.createSession(input)
+    (_e, input: { title: string; workDir: string; providerId: string; projectId?: string }) =>
+      db.createSession(input)
   )
   ipcMain.handle(IPC_CHANNELS.SessionsRename, (_e, id: string, title: string) =>
     db.renameSession(id, title)
@@ -209,21 +215,61 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   })
   ipcMain.handle(IPC_CHANNELS.ArtifactsDelete, (_e, id: string) => db.deleteArtifact(id))
 
-  // 工作区只读浏览（右侧结果区文件 Tab）：会话 workDir 即沙箱根，越界由 browse 层抛错
-  ipcMain.handle(IPC_CHANNELS.WorkspaceListDir, (_e, sessionId: string, relPath: string) => {
-    const session = db.getSession(sessionId)
-    if (!session) return { ok: false, error: '会话不存在' }
+  // ---------- 项目空间 ----------
+
+  ipcMain.handle(IPC_CHANNELS.ProjectsList, () => db.listProjects())
+  ipcMain.handle(IPC_CHANNELS.ProjectsCreate, (_e, input: ProjectCreateInput) => {
+    const name = (input?.name ?? '').trim()
+    const workDir = (input?.workDir ?? '').trim()
+    if (!name) return { ok: false, error: '请填写项目空间名称' }
+    if (!workDir) return { ok: false, error: '请选择项目空间的工作目录' }
+    const project = db.createProject({
+      name,
+      workDir,
+      instructions: input.instructions,
+      providerId: input.providerId
+    })
+    return { ok: true, project }
+  })
+  ipcMain.handle(IPC_CHANNELS.ProjectsUpdate, (_e, id: string, patch: ProjectPatch) => {
+    if (!db.getProject(id)) return { ok: false, error: '项目空间不存在' }
+    const next: ProjectPatch = { ...patch }
+    if (next.name !== undefined) next.name = next.name.trim()
+    if (next.workDir !== undefined) next.workDir = next.workDir.trim()
+    if (next.name !== undefined && !next.name) return { ok: false, error: '项目名称不能为空' }
+    if (next.workDir !== undefined && !next.workDir) return { ok: false, error: '工作目录不能为空' }
+    return { ok: true, project: db.updateProject(id, next) }
+  })
+  // 只删空间行：FK 把其下任务的 project_id 置 NULL（任务与产物全留），不碰磁盘任何文件
+  ipcMain.handle(IPC_CHANNELS.ProjectsDelete, (_e, id: string) => {
+    db.deleteProject(id)
+    return { ok: true }
+  })
+  // 跨任务产物（资产表数据源）：absPath 以空间工作目录为基，sessionTitle 标明来源任务
+  ipcMain.handle(IPC_CHANNELS.ProjectsArtifacts, (_e, projectId: string) => {
+    const project = db.getProject(projectId)
+    if (!project) return []
+    return db.listArtifactsByProject(projectId).map((a) => ({
+      ...a,
+      absPath: path.resolve(project.workDir, a.relPath ?? '')
+    }))
+  })
+
+  // 工作区只读浏览（对话页结果区 + 空间资产页）：沙箱根由选择器解析，越界由 browse 层抛错
+  ipcMain.handle(IPC_CHANNELS.WorkspaceListDir, (_e, target: BrowseTarget, relPath: string) => {
+    const resolved = resolveBrowseRoot(db, target ?? {})
+    if (!resolved.ok) return { ok: false, error: resolved.error }
     try {
-      return { ok: true, entries: listDir(session.workDir, relPath) }
+      return { ok: true, entries: listDir(resolved.root, relPath) }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
-  ipcMain.handle(IPC_CHANNELS.WorkspaceReadFile, (_e, sessionId: string, relPath: string) => {
-    const session = db.getSession(sessionId)
-    if (!session) return { ok: false, error: '会话不存在' }
+  ipcMain.handle(IPC_CHANNELS.WorkspaceReadFile, (_e, target: BrowseTarget, relPath: string) => {
+    const resolved = resolveBrowseRoot(db, target ?? {})
+    if (!resolved.ok) return { ok: false, error: resolved.error }
     try {
-      return readFilePreview(session.workDir, relPath)
+      return readFilePreview(resolved.root, relPath)
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
@@ -555,7 +601,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
 
     // 渐进式披露一级：把已启用技能的轻量索引拼进系统提示词（不入库，每轮现拼）
     const skillIndex = skillRegistry.indexForPrompt()
-    const systemPrompt = skillIndex ? `${BASE_SYSTEM_PROMPT}\n\n${skillIndex}` : BASE_SYSTEM_PROMPT
+    let systemPrompt = skillIndex ? `${BASE_SYSTEM_PROMPT}\n\n${skillIndex}` : BASE_SYSTEM_PROMPT
+
+    // 项目空间：注入空间身份 + 项目指令 + 已有产出清单（同样每轮现拼，不入库）
+    if (session.projectId) {
+      const project = db.getProject(session.projectId)
+      if (project) {
+        const section = buildProjectPromptSection(project, db.listArtifactsByProject(project.id))
+        if (section) systemPrompt = `${systemPrompt}\n\n${section}`
+      }
+    }
 
     // 从 DB 载入历史 + 追加本次 user + 立即入库
     const messages: ChatMessage[] = db.listMessages(sessionId)

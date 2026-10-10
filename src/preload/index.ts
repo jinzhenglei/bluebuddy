@@ -6,6 +6,7 @@ import type {
   AppInfo,
   AppPrefs,
   ArtifactInfo,
+  BrowseTarget,
   ChatMessage,
   DirEntry,
   FilePreview,
@@ -15,6 +16,9 @@ import type {
   McpServerInfo,
   McpServerStatus,
   McpTransport,
+  ProjectCreateInput,
+  ProjectInfo,
+  ProjectPatch,
   ProviderConfig,
   SessionInfo,
   SkillInfo,
@@ -50,8 +54,12 @@ const api = {
   },
   sessions: {
     list: (): Promise<SessionInfo[]> => ipcRenderer.invoke(IPC_CHANNELS.SessionsList),
-    create: (input: { title: string; workDir: string; providerId: string }): Promise<SessionInfo> =>
-      ipcRenderer.invoke(IPC_CHANNELS.SessionsCreate, input),
+    create: (input: {
+      title: string
+      workDir: string
+      providerId: string
+      projectId?: string
+    }): Promise<SessionInfo> => ipcRenderer.invoke(IPC_CHANNELS.SessionsCreate, input),
     rename: (id: string, title: string): Promise<void> =>
       ipcRenderer.invoke(IPC_CHANNELS.SessionsRename, id, title),
     delete: (id: string): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.SessionsDelete, id)
@@ -66,15 +74,35 @@ const api = {
     delete: (id: string): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.ArtifactsDelete, id)
   },
   workspace: {
-    /** 列目录（relPath 空串为根）；主进程沙箱限在本会话 workDir 内 */
+    /** 列目录（relPath 空串为根）；沙箱根由选择器解析：会话 workDir 或空间 work_dir */
     listDir: (
-      sessionId: string,
+      target: BrowseTarget,
       relPath: string
     ): Promise<{ ok: boolean; entries?: DirEntry[]; error?: string }> =>
-      ipcRenderer.invoke(IPC_CHANNELS.WorkspaceListDir, sessionId, relPath),
+      ipcRenderer.invoke(IPC_CHANNELS.WorkspaceListDir, target, relPath),
     /** 读文本预览；二进制/超大/越界各自标记或报错 */
-    readFile: (sessionId: string, relPath: string): Promise<FilePreview> =>
-      ipcRenderer.invoke(IPC_CHANNELS.WorkspaceReadFile, sessionId, relPath)
+    readFile: (target: BrowseTarget, relPath: string): Promise<FilePreview> =>
+      ipcRenderer.invoke(IPC_CHANNELS.WorkspaceReadFile, target, relPath)
+  },
+  projects: {
+    /** 全部空间，新的在前 */
+    list: (): Promise<ProjectInfo[]> => ipcRenderer.invoke(IPC_CHANNELS.ProjectsList),
+    create: (
+      input: ProjectCreateInput
+    ): Promise<{ ok: boolean; project?: ProjectInfo; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ProjectsCreate, input),
+    /** patch 语义：只改传入字段 */
+    update: (
+      id: string,
+      patch: ProjectPatch
+    ): Promise<{ ok: boolean; project?: ProjectInfo; error?: string }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ProjectsUpdate, id, patch),
+    /** 只删空间：任务转未归类，磁盘文件一概不动 */
+    remove: (id: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ProjectsDelete, id),
+    /** 空间内跨任务产物（新的在前，同 relPath 只留最新一条） */
+    artifacts: (projectId: string): Promise<ArtifactInfo[]> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ProjectsArtifacts, projectId)
   },
   skills: {
     list: (): Promise<SkillInfo[]> => ipcRenderer.invoke(IPC_CHANNELS.SkillsList),

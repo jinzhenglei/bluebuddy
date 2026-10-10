@@ -4,6 +4,7 @@ import type {
   AppInfo,
   AppPrefs,
   ArtifactInfo,
+  BrowseTarget,
   ChatMessage,
   DirEntry,
   FilePreview,
@@ -13,6 +14,9 @@ import type {
   McpServerInfo,
   McpServerStatus,
   McpTransport,
+  ProjectCreateInput,
+  ProjectInfo,
+  ProjectPatch,
   ProviderConfig,
   SessionInfo,
   SkillInfo,
@@ -36,7 +40,12 @@ interface LlmApi {
 
 interface SessionsApi {
   list: () => Promise<SessionInfo[]>
-  create: (input: { title: string; workDir: string; providerId: string }) => Promise<SessionInfo>
+  create: (input: {
+    title: string
+    workDir: string
+    providerId: string
+    projectId?: string
+  }) => Promise<SessionInfo>
   rename: (id: string, title: string) => Promise<void>
   delete: (id: string) => Promise<void>
 }
@@ -51,11 +60,25 @@ interface ArtifactsApi {
 }
 
 interface WorkspaceApi {
+  /** target：对话页传 sessionId，空间资产页传 projectId */
   listDir: (
-    sessionId: string,
+    target: BrowseTarget,
     relPath: string
   ) => Promise<{ ok: boolean; entries?: DirEntry[]; error?: string }>
-  readFile: (sessionId: string, relPath: string) => Promise<FilePreview>
+  readFile: (target: BrowseTarget, relPath: string) => Promise<FilePreview>
+}
+
+interface ProjectsApi {
+  list: () => Promise<ProjectInfo[]>
+  create: (
+    input: ProjectCreateInput
+  ) => Promise<{ ok: boolean; project?: ProjectInfo; error?: string }>
+  update: (
+    id: string,
+    patch: ProjectPatch
+  ) => Promise<{ ok: boolean; project?: ProjectInfo; error?: string }>
+  remove: (id: string) => Promise<{ ok: boolean }>
+  artifacts: (projectId: string) => Promise<ArtifactInfo[]>
 }
 
 interface SkillsApi {
@@ -160,6 +183,7 @@ declare global {
       messages: MessagesApi
       artifacts: ArtifactsApi
       workspace: WorkspaceApi
+      projects: ProjectsApi
       skills: SkillsApi
       hub: HubApi
       mcp: McpApi

@@ -71,6 +71,36 @@ export interface SessionInfo {
   workDir: string
   providerId: string
   createdAt: number
+  /** 所属项目空间；未归类时为 undefined */
+  projectId?: string
+}
+
+/** 项目空间：绑定一个工作目录，空间内任务共用该目录与项目指令 */
+export interface ProjectInfo {
+  id: string
+  name: string
+  workDir: string
+  /** 项目指令原文；未设置 undefined，清空后 '' */
+  instructions?: string
+  /** 空间默认模型 */
+  providerId?: string
+  createdAt: number
+}
+
+/** 新建空间入参（name/workDir 必填，其余可后补） */
+export interface ProjectCreateInput {
+  name: string
+  workDir: string
+  instructions?: string
+  providerId?: string
+}
+
+/** 改空间入参：patch 语义，只改传入字段 */
+export interface ProjectPatch {
+  name?: string
+  instructions?: string
+  providerId?: string
+  workDir?: string
 }
 
 /** 产物记录（与主进程 DbStore 保持列段同构，relPath/url 其中一个未设时为 undefined） */
@@ -85,6 +115,8 @@ export interface ArtifactInfo {
   /** 主进程下发的绝对路径（file 类产物才有），供 shell.openPath 直接使用 */
   absPath?: string
   createdAt: number
+  /** 跨任务聚合（空间资产表）时附带的来源任务标题 */
+  sessionTitle?: string
 }
 
 /** 技能信息（Stage 4 管理页列表行）：磁盘元数据 + 库内启用状态 */
@@ -228,6 +260,15 @@ export interface DirEntry {
   isDir: boolean
   /** 文件字节数；目录为 0 */
   size: number
+}
+
+/**
+ * 只读浏览的沙箱根选择器：对话页传 sessionId（根=会话 workDir），
+ * 空间资产页传 projectId（根=空间 work_dir）；两者都给时会话优先。
+ */
+export interface BrowseTarget {
+  sessionId?: string
+  projectId?: string
 }
 
 /** 文本文件预览结果；二进制/超大各自标记，由 UI 决定降级方式 */
