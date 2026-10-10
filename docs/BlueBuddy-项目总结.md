@@ -25,7 +25,7 @@
 
 ## 二、交付总览
 
-### 2.1 计划阶段（0–7 全部交付）
+### 2.1 计划阶段（0–8 全部交付）
 
 | 阶段 | 内容                                                                    | 验收要点                                         | 状态 |
 | ---- | ----------------------------------------------------------------------- | ------------------------------------------------ | ---- |
@@ -37,6 +37,7 @@
 | 5    | MCP 客户端：`mcp_servers` 表 + stdio/HTTP/SSE + 管理页 + 工具并入       | 接入 filesystem server 可被模型调用              | ✅   |
 | 6    | NSIS 打包 + 首启向导 + 二期架构预留检查表                               | 安装包在他机可装可跑，数据不出本机               | ✅   |
 | 7    | 自动更新（electron-updater + 检查/下载/重启安装 UI）                    | 低版本测试包能发现新版→下载有进度→重启完成升级   | ✅   |
+| 8    | 项目空间一期（§10 规划内落地）：空间 + 任务 + 资产 + 项目指令           | 建空间→空间内提问→产出归入资产→重进不丢          | ✅   |
 
 ### 2.2 计划之外长出来的增强（阶段 5 之后）
 
@@ -52,11 +53,11 @@
 
 | 指标               | 数值                                                                                           |
 | ------------------ | ---------------------------------------------------------------------------------------------- |
-| 非测试源码         | 57 文件 / 10,619 行                                                                            |
-| 主进程             | 49 文件 / 7,832 行（含 20 个 spec）                                                            |
-| 渲染层             | 29 文件 / 6,167 行（含 5 个 spec）                                                             |
-| 共享类型 + preload | 4 文件 / 744 行                                                                                |
-| 单测               | **282 passed**（`vitest run` exit 0）                                                          |
+| 非测试源码         | 64 文件 / 11,814 行                                                                            |
+| 主进程             | 53 文件 / 8,487 行（含 22 个 spec）                                                            |
+| 渲染层             | 34 文件 / 6,940 行（含 5 个 spec）                                                             |
+| 共享类型 + preload | 4 文件 / 837 行                                                                                |
+| 单测               | **309 passed**（27 个 spec 文件，`vitest run` exit 0）                                         |
 | 门禁               | typecheck(node/web) ✅ · eslint 零告警 ✅ · prettier ✅                                        |
 | 运行环境           | Electron 39.8.10 / React 19.2 / TS 5.9 / Tailwind 4.3 / Vite 7.2 / better-sqlite3 13 / zod 4.6 |
 
@@ -158,22 +159,23 @@ renderer ──(IPC 类型契约)──> preload ──> ipc.ts（壳层）
 
 ## 四、模块清单
 
-| 模块     | 关键文件                                               | 职责                                                                      | 设计要点                                                                                             |
-| -------- | ------------------------------------------------------ | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| 引擎     | `agent/engine.ts`                                      | 单层 ReAct 循环、tool-call delta 聚合、批准挂钩、收尾兜底                 | 全依赖注入；`maxIterations` 是参数不是常量硬编码在调用方                                             |
-| LLM 网关 | `llm/gateway.ts` `llm/sse.ts`                          | OpenAI 兼容流式请求、SSE 帧解析、abort                                    | 一份代码同时吃云端 API 与 Ollama；`reasoning_content` 单独成事件                                     |
-| 工具注册 | `tools/registry.ts` `tools/types.ts`                   | zod 参数校验、OpenAI spec 生成、统一错误转文本结果                        | `arguments` 是 JSON 字符串（协议地道约定）→ parse 后再校验；MCP 工具带 `parametersJsonSchema` 直透传 |
-| 内置工具 | `tools/builtin/{filesystem,terminal,web,use_skill}.ts` | `read_file` `write_file` `list_dir` `run_command` `fetch_url` `use_skill` | `write_file` 产出 artifact；`run_command` 高危需批准；`use_skill` 无副作用不批准                     |
-| 工作区   | `workspace/provider.ts` `local.ts` `browse.ts`         | 沙箱读写、exec、右侧只读浏览                                              | 写严格锁 root；读额外允许 `readRoots`（技能目录只读可信根）；exec 不拼命令串                         |
-| 技能     | `skills/{loader,registry,manager,hub}.ts`              | SKILL.md 解析、轻量索引、磁盘×DB 生命周期、市场下载                       | "渐进式披露"两级；技能脚本无独立执行通道；`display_name` 与 slug 分离                                |
-| MCP      | `mcp/{manager,hub,token}.ts`                           | stdio/HTTP/SSE 连接池、远端工具映射、魔搭市场、令牌加密                   | 远端工具一律 `requiresApproval=true`（服务器进程不受沙箱约束，故用批准补偿）                         |
-| 权限     | `permissions/gate.ts`                                  | 把同步"要不要批准"桥接成可等待 UI 的异步流程                              | pending Map + sessionGrants + autoApprove；会话销毁/reload 必须清 pending                            |
-| 存储     | `db/store.ts`                                          | 7 张表 + `PRAGMA user_version` 顺序迁移                                   | WAL + 外键 CASCADE；引擎与 UI 只见函数不见 SQL                                                       |
-| 配置     | `settings.ts` `src/shared/types.ts(AppPrefs)`          | 模型接入配置（apiKey 加密）+ 应用偏好（settings_kv）                      | 渲染层拿到的 Key 永远是掩码；保存时识别掩码占位不回写                                                |
-| IPC      | `ipc.ts` + `preload/index.ts` + `shared/ipc.ts`        | 通道注册、事件转发、并发表、产物与消息落库                                | 通道名集中在常量表，preload 是唯一能力白名单                                                         |
-| 外部应用 | `apps.ts`                                              | IDE 探测、图标提取、打开文件夹、OpenCode 特殊处置                         | 探测扫安装目录 exe（不依赖 PATH）；`shellLaunch` 与 `projectStateDb` 两个扩展位                      |
-| 更新     | `updater.ts`                                           | 检查/下载/安装，事件流化                                                  | `autoDownload=false`，用户确认才下载                                                                 |
-| 渲染层   | `pages/*` `components/*` `stores/*`                    | 5 页 + 全局组件 + turn 状态机                                             | `turn-reducer.ts` 把事件流折叠成 UI 状态（纯函数、可单测）                                           |
+| 模块     | 关键文件                                                        | 职责                                                                                                                      | 设计要点                                                                                                                              |
+| -------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| 引擎     | `agent/engine.ts`                                               | 单层 ReAct 循环、tool-call delta 聚合、批准挂钩、收尾兜底                                                                 | 全依赖注入；`maxIterations` 是参数不是常量硬编码在调用方                                                                              |
+| LLM 网关 | `llm/gateway.ts` `llm/sse.ts`                                   | OpenAI 兼容流式请求、SSE 帧解析、abort                                                                                    | 一份代码同时吃云端 API 与 Ollama；`reasoning_content` 单独成事件                                                                      |
+| 工具注册 | `tools/registry.ts` `tools/types.ts`                            | zod 参数校验、OpenAI spec 生成、统一错误转文本结果                                                                        | `arguments` 是 JSON 字符串（协议地道约定）→ parse 后再校验；MCP 工具带 `parametersJsonSchema` 直透传                                  |
+| 内置工具 | `tools/builtin/{filesystem,terminal,web,use_skill}.ts`          | `read_file` `write_file` `list_dir` `run_command` `fetch_url` `use_skill`                                                 | `write_file` 产出 artifact；`run_command` 高危需批准；`use_skill` 无副作用不批准                                                      |
+| 工作区   | `workspace/provider.ts` `local.ts` `browse.ts` `browse-root.ts` | 沙箱读写、exec、右侧只读浏览、浏览根寻址                                                                                  | 写严格锁 root；读额外允许 `readRoots`（技能目录只读可信根）；exec 不拼命令串；`resolveBrowseRoot` 把「会话/空间」两种寻址归一成一个根 |
+| 技能     | `skills/{loader,registry,manager,hub}.ts`                       | SKILL.md 解析、轻量索引、磁盘×DB 生命周期、市场下载                                                                       | "渐进式披露"两级；技能脚本无独立执行通道；`display_name` 与 slug 分离                                                                 |
+| MCP      | `mcp/{manager,hub,token}.ts`                                    | stdio/HTTP/SSE 连接池、远端工具映射、魔搭市场、令牌加密                                                                   | 远端工具一律 `requiresApproval=true`（服务器进程不受沙箱约束，故用批准补偿）                                                          |
+| 权限     | `permissions/gate.ts`                                           | 把同步"要不要批准"桥接成可等待 UI 的异步流程                                                                              | pending Map + sessionGrants + autoApprove；会话销毁/reload 必须清 pending                                                             |
+| 存储     | `db/store.ts`                                                   | 7 张表（sessions / messages / artifacts / skills / mcp_servers / settings_kv / projects）+ `PRAGMA user_version` 顺序迁移 | WAL + 外键 CASCADE；删空间靠 `ON DELETE SET NULL` 解绑；引擎与 UI 只见函数不见 SQL                                                    |
+| 配置     | `settings.ts` `src/shared/types.ts(AppPrefs)`                   | 模型接入配置（apiKey 加密）+ 应用偏好（settings_kv）                                                                      | 渲染层拿到的 Key 永远是掩码；保存时识别掩码占位不回写                                                                                 |
+| IPC      | `ipc.ts` + `preload/index.ts` + `shared/ipc.ts`                 | 通道注册、事件转发、并发表、产物与消息落库                                                                                | 通道名集中在常量表，preload 是唯一能力白名单                                                                                          |
+| 外部应用 | `apps.ts`                                                       | IDE 探测、图标提取、打开文件夹、OpenCode 特殊处置                                                                         | 探测扫安装目录 exe（不依赖 PATH）；`shellLaunch` 与 `projectStateDb` 两个扩展位                                                       |
+| 更新     | `updater.ts`                                                    | 检查/下载/安装，事件流化                                                                                                  | `autoDownload=false`，用户确认才下载                                                                                                  |
+| 项目空间 | `agent/project-prompt.ts` `db/store.ts(projects)`               | 空间 = 工作目录 + 项目指令；跨任务产物聚合；上下文注入段拼装                                                              | 注入段是**纯函数**（可无 Electron 单测）；只追加到现拼的 systemPrompt，不改引擎；删空间不碰磁盘文件                                   |
+| 渲染层   | `pages/*` `components/*` `stores/*`                             | 7 页 + 全局组件 + turn 状态机                                                                                             | `turn-reducer.ts` 把事件流折叠成 UI 状态（纯函数、可单测）；`WorkspaceBrowser` 为对话页与空间资产页共用的浏览件                       |
 
 ---
 
@@ -274,17 +276,24 @@ MCP 远端工具由 `McpManager` 包装成 `mcp_<server>_<tool>` 的本地工具
 
 `PRAGMA user_version` + 顺序 upgrade 分支，**永不改老迁移脚本**：
 
-| 版本 | 内容                                                                               |
-| ---- | ---------------------------------------------------------------------------------- |
-| v1   | `sessions` / `messages` / `artifacts`（+ 索引、FK CASCADE、WAL）                   |
-| v2   | `messages.reasoning` 列（思考过程可回看）                                          |
-| v3   | `skills` 表（name PK / dir / enabled / created_at）                                |
-| v4   | `skills.display_name`                                                              |
-| v5   | `mcp_servers` 表                                                                   |
-| v6   | MCP 市场字段（display_name / hub_id）+ `settings_kv` 通用 KV                       |
-| v7   | MCP 市场元数据快照（description / category / source_url / readme / tools_doc / …） |
+| 版本 | 内容                                                                             |
+| ---- | -------------------------------------------------------------------------------- |
+| v1   | `sessions` / `messages` / `artifacts`（+ 索引、FK CASCADE、WAL）                 |
+| v2   | `messages.reasoning` 列（思考过程可回看）                                        |
+| v3   | `skills` 表（name PK / dir / enabled / created_at）                              |
+| v4   | `skills.display_name`                                                            |
+| v5   | `mcp_servers` 表                                                                 |
+| v6   | MCP 市场字段（display_name / hub_id）+ `settings_kv` 通用 KV                     |
+| v7   | MCP 市场元数据快照（description / category / source_url / stars / call_volume）  |
+| v8   | MCP 文档快照（readme / tools_doc / license / publisher / icon_url / 时间与热度） |
+| v9   | `projects` 表 + `sessions.project_id`（FK `ON DELETE SET NULL`）+ 空间维度索引   |
 
-迁移有专门测试（DB 迁移版本升级 / 兼容性用例），因为"老用户升级后库打不开"是唯一致命的线上事故。
+迁移口径：只追加 `if (current < N)` 分支，**永不改老脚本**。迁移有专门测试（DB 版本升级 / 兼容性用例），因为"老用户升级后库打不开"是唯一致命的线上事故。
+
+v9 的两个细节记下来当参考：
+
+- 往 `sessions` 上 `ADD COLUMN … REFERENCES` 之所以能成立，前提是默认值必须为 NULL（此处正好满足）；构造器里 `PRAGMA foreign_keys = ON` 已开，所以未知 `projectId` 会被 FK 直接拒掉，而不是静默留下野指针。
+- 一个实际副作用：早期迁移测试里的 v5/v6/v7 夹具只手建 `mcp_servers` / `settings_kv`，v9 要给 `sessions` 加列就报 `no such table`——**补建表语句到夹具里**，而不是在主程序加"表不存在就跳过"的守卫（那是为测试写死的生产死代码）。
 
 ### 6.9 敏感信息
 
@@ -318,30 +327,54 @@ MCP 远端工具由 `McpManager` 包装成 `mcp_<server>_<tool>` 的本地工具
 
 > 一次**重要的排错教训**：滚动条改动"看起来没生效"，真因是当时运行的是 **10-01 上午的旧安装包**（其打包 CSS 里 `-webkit-scrollbar` 命中 0 次），不是代码问题。排查手法：`Get-Process` 看进程**启动路径与时间** → 对比安装目录内产物与源码提交时间 → 必要时重跑 `electron-vite build` 验证构建管线是否吃掉了规则（结论：Tailwind v4 / Lightning CSS 不吃）。
 
+### 6.14 项目空间（Project Space，一期）
+
+把"一件事"从一堆平行会话里拎出来：一个空间 = **一个工作目录 + 一份项目指令**，空间内任务共用该目录，跨任务产出在空间的「资产」页统一看。
+
+**口径（先定再做）**：空间与目录一对一（不做多目录归档区）；一期只做 任务 + 资产 + 项目指令（不做计划看板、动态流、定时任务）；上下文注入 = 项目指令 **＋** 产物清单摘要（只文件名 + 相对路径，**不含内容**）。
+
+**数据模型**：`projects(id, name, work_dir, instructions, provider_id, created_at)`；`sessions.project_id` 外键 `ON DELETE SET NULL`。这条 FK 把最危险的操作变安全了：**删空间只解除归属**，任务与产物行全部留下，磁盘上一个文件都不碰（未归类任务照旧在侧边栏显示）。
+
+**上下文注入**（`agent/project-prompt.ts`）：`buildProjectPromptSection(project, artifacts)` 是纯函数，返回要追加的文本段，无内容就返回空串。段一为空间名 + 工作目录 + `instructions` 原文；段二为「已有产出」清单，最多 **30** 条 `- 名称（相对路径｜来自「任务标题」）`，超出只补一句「另有 N 项未列出」。link 类产物不注入（含 token 且无引用价值）。拼装点在 `ipc.ts` 现有 `systemPrompt` 那行之后，**仍坚持"现拼不入库"**；`engine.ts` 一行未改，`engine-headless.spec.ts` 继续当架构命门的自动化守卫。
+
+**浏览根归一（本期唯一的破坏性改造）**：`workspace:list-dir` / `read-file` 首参从 `sessionId: string` 改成选择器 `BrowseTarget = { sessionId?, projectId? }`，主进程用纯函数 `resolveBrowseRoot(db, target)` 解析沙箱根（会话取 `session.workDir`，空间取 `project.work_dir`，sessionId 优先；都找不到就报错，**绝不回退到进程 cwd 或猜根**）。收益很直接：空间资产页不用另开一套浏览接口，目录树/预览与对话页共用同一实现。代价是调用方全改（本仓库内只有 `ResultPanel` 与两个新页面）。
+
+**IPC**：`projects:list / create / update / delete / artifacts` 五个通道。写操作返回 `{ok, project?, error?}` 信封（跟 `skills.import` / `mcp.add` 既有风格一致），读操作返裸数组。`artifacts` 返回项附 `sessionTitle`，资产表才能说出"这份文件是哪个任务交的"。
+
+**UI**：侧边栏「新建任务」下方加「项目空间」→ 空间卡片网格（名称 / 目录 / 任务数 / 产出数 / 最近产出）+「新建项目」弹窗→ 详情页：面包屑、「在 IDE 打开」、删除空间，**任务 / 资产** 双 Tab，底部 Composer，右栏空间配置（指令失焦保存）。在空间里提问就是"新建任务并立即执行"，沿用首页的标题截断与 provider 校验规则（无可用模型时明说去设置，不静默失败）。旧任务列表与搜索完全没动。
+
+**两个动手才发现的坑**（都是"首帧没数据"这一类）：
+
+- 配置面板草稿拿 `project?.name ?? ''` 做 `useState` 初值——首帧空间列表还没 `load` 回来，草稿就是空串，用户在「项目指令」框失焦时会把已有指令**写成空**。改成"草稿只在用户真编辑过才非空"（`string | null` + `?? 库内值`），保存成功才交还库内值，失败保留草稿。教训：**失焦即保存的字段，初值不能拿异步数据**。
+- 空间详情页新建任务后走 `openSession(id)`，而 `createSession` 内部已经 `selectSession` 过一次；再 select 一次会用库内快照把**乐观显示的用户消息盖掉**（看着像提问没发出去）。`openSession` 加了 `activeSessionId !== id` 守卫。教训：同一个动作在 store 里已有副作用时，壳层要只做路由。
+
+一期明确不做：计划看板、动态时间线、定时任务、独立资产归档区（多目录/网盘式）、空间级技能与连接器覆盖、成员与协作（本地单用户）、产物摘要的向量化检索。
+
 ---
 
 ## 七、IPC 契约全景
 
 通道名集中在 `src/shared/ipc.ts`，preload 是唯一白名单实现，类型即契约。
 
-| 组         | 方法                                                  | 说明                                    |
-| ---------- | ----------------------------------------------------- | --------------------------------------- |
-| settings   | list / upsert / remove / test                         | apiKey 只回掩码                         |
-| llm        | start / cancel / onEvent                              | 阶段 1 的纯对话流（仍保留）             |
-| sessions   | list / create / rename / delete                       | delete 会先 abort 活跃 turn             |
-| messages   | list                                                  | 含 reasoning，供回看                    |
-| artifacts  | list / delete                                         | file 类带 `absPath`                     |
-| workspace  | listDir / readFile                                    | 右侧结果区只读浏览，限本会话 workDir    |
-| agent      | send / cancel / onEvent                               | send 立即回 turnId；事件流承载 6 类事件 |
-| permission | reply(requestId, approved, alwaysAllow)               | 批准回传                                |
-| skills     | list / setEnabled / remove / import                   | import 按路径自动分派文件夹/ZIP         |
-| hub        | search / install                                      | SkillHub 市场                           |
-| mcp        | list / add / setEnabled / remove / reconnect          | list 带运行时状态与已注册工具名         |
-| mcpHub     | search / install / getToken / setToken                | 魔搭市场 + 令牌                         |
-| prefs      | get / set / appInfo / wipe                            | wipe 需渲染层两步确认                   |
-| updater    | check / download / install / onEvent                  | 见 §6.12                                |
-| system     | pickDirectory / pickZipFile / openPath / openExternal | openExternal 主进程侧限 http/https      |
-| apps       | list / addCustom / remove / setEnabled / openFolder   | list 带 `enabled/removable/icon`        |
+| 组         | 方法                                                   | 说明                                                 |
+| ---------- | ------------------------------------------------------ | ---------------------------------------------------- |
+| settings   | list / upsert / remove / test                          | apiKey 只回掩码                                      |
+| llm        | start / cancel / onEvent                               | 阶段 1 的纯对话流（仍保留）                          |
+| sessions   | list / create / rename / delete                        | create 可带 `projectId`；delete 会先 abort 活跃 turn |
+| messages   | list                                                   | 含 reasoning，供回看                                 |
+| artifacts  | list / delete                                          | file 类带 `absPath`                                  |
+| workspace  | listDir(BrowseTarget, rel) / readFile(BrowseTarget, r) | 只读浏览；根出会话 workDir 或空间 work_dir（§6.14）  |
+| agent      | send / cancel / onEvent                                | send 立即回 turnId；事件流承载 6 类事件              |
+| permission | reply(requestId, approved, alwaysAllow)                | 批准回传                                             |
+| skills     | list / setEnabled / remove / import                    | import 按路径自动分派文件夹/ZIP                      |
+| projects   | list / create / update / remove / artifacts            | 项目空间；写操作返 `{ok, project?, error?}` 信封     |
+| hub        | search / install                                       | SkillHub 市场                                        |
+| mcp        | list / add / setEnabled / remove / reconnect           | list 带运行时状态与已注册工具名                      |
+| mcpHub     | search / install / getToken / setToken                 | 魔搭市场 + 令牌                                      |
+| prefs      | get / set / appInfo / wipe                             | wipe 需渲染层两步确认                                |
+| updater    | check / download / install / onEvent                   | 见 §6.12                                             |
+| system     | pickDirectory / pickZipFile / openPath / openExternal  | openExternal 主进程侧限 http/https                   |
+| apps       | list / addCustom / remove / setEnabled / openFolder    | list 带 `enabled/removable/icon`                     |
 
 **外链安全**：`setWindowOpenHandler` 一律转系统浏览器并 deny；`will-navigate` 拦截非应用来源的 http(s) 链接——否则 Markdown 正文里的普通链接会把应用窗口整个导航走。
 
@@ -356,7 +389,7 @@ prettier --write .                                  # 格式化（改到的文�
 tsc --noEmit -p tsconfig.node.json --composite false
 tsc --noEmit -p tsconfig.web.json  --composite false
 eslint --cache .                                    # 警告也必须清零
-vitest run                                          # 282 passed, exit 0
+vitest run                                          # 309 passed, exit 0
 ```
 
 **提交纪律**：Conventional Commits（中文正文写清动机与取舍）；**按路径选择性 `git add`**（绝不 `git add .`，避免把共享工作区里别人的改动或生成目录一起卷进来）；`.kb/`、`docs/wiki/`、`plugins/repo-wiki/` 这类生成物不纳入跟踪。
@@ -365,7 +398,8 @@ vitest run                                          # 282 passed, exit 0
 
 - **架构回归**：`engine-headless.spec.ts` 断言无 Electron 环境也能跑通一次任务——命门①的自动化守卫；
 - **纯逻辑优先**：引擎 15+ 例（含批准、异常、abort、收尾）；`turn-reducer` / `mcp-detail` / `mcp-import` / `tool-display` / `scrollbar-reveal` 等渲染层逻辑一律把**纯函数抽出来测**，绕开 DOM；
-- **数据层**：DB 迁移与级联行为、`apps.spec.ts`（含 `registerOpenCodeProject` 的幂等/归一/缺库不抛）；
+- **数据层**：DB 迁移与级联行为（含 v8 旧库升 v9 后老数据完好、删空间后任务转未归类且产物仍在）、`apps.spec.ts`（含 `registerOpenCodeProject` 的幂等/归一/缺库不抛）；
+- **上下文拼装**：`project-prompt.spec.ts` 断注入段的三种组合（只指令 / 只产物 / 两者都有）、超 30 条截断与计数、link 类被排除、**返值不含产物内容**；`browse-root.spec.ts` 断 session / project / 不存在 id 三种输入——两个都是无 DOM 无 Electron 的纯函数用例；
 - **就近放置**：spec 与源文件同目录，改名/删除时不会漏。
 
 **协作节奏（vibe coding 工作法）**：先讲再写 → 小步提交 → 每阶段验收 + 抽查代码解释 → 重要选型写 ADR → 审查 AI 代码三板斧（看 diff、跑起来、追问"输入是 XX 会怎样"）。
@@ -385,6 +419,7 @@ vitest run                                          # 282 passed, exit 0
 | 上下文管理      | 全量 messages 回喂（仅剥 reasoning/createdAt），无摘要压缩                         | 长会话 token 线性增长，可能超窗口                                                         |
 | 工作区          | 仅 LocalWorkspace；无远程/容器工作区                                               | 二期增量                                                                                  |
 | OpenCode 集成   | 目录只能登记进其项目列表**头部**，仍需用户点一下；GUI 运行中时可能被内存旧状态覆盖 | 该应用做不到"一键带目录打开"，其他 IDE 可以                                               |
+| 项目空间        | 一期只有「任务 + 资产 + 项目指令」；一个空间一个目录                               | 无多目录归档区、无空间级技能/连接器覆盖、无看板与定时任务；删空间不删任务也不删文件       |
 | 代码签名        | 无                                                                                 | 首次下载有 SmartScreen 提示                                                               |
 | 平台            | Windows 为主（mac/linux 脚本留着未验）                                             | —                                                                                         |
 | 可观测性        | 无应用日志文件、无崩溃收集（刻意不做，隐私优先）                                   | 现场排错要靠 DevTools                                                                     |
@@ -433,17 +468,18 @@ vitest run                                          # 282 passed, exit 0
 
 ### 10.1 近期（P0–P1，桌面形态内做深）
 
-| 优先级 | 项                                        | 动机                                               | 做法（含接缝）                                                                                                                                                  | 验收                                                        |
-| ------ | ----------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| P0     | **迭代上限可配置**                        | 6 轮对"读代码→改→跑→修"偏紧，撞上限只能靠收尾 pass | `AppPrefs.maxIterations`（默认仍 6，上限如 20）→ `ipc.AgentSend` 传入引擎；设置页"权限与安全"组加滑条                                                           | 改完即生效、重启保持；单测覆盖"传 1 时确实只跑 1 轮 + 收尾" |
-| P0     | **上下文用量可见 + 裁剪策略**             | 长会话 token 线性涨，撞窗口后行为不可预期          | 先做"可见"（估算字符/轮数显示在 Composer 状态区），再做"裁剪"：保留 system + 最近 N 轮 + 更早摘要为一条 system 注记                                             | 长会话不崩、可复现的截断行为；纯函数单测                    |
-| P1     | **外循环 + 预算护栏**（**当前明确暂缓**） | 复杂任务需要"目标未达成自动续跑"                   | 不无脑重跑 turn：先在 `turn-end` 处判定"是否有未完成事项"（模型自评 + 待办清单工具），续跑要有**三重预算**——累计轮数 / token / 墙钟时间，任一触顶即停并交代现状 | 判停单测 + 人工长任务实测                                   |
-| P1     | **技能选择质量**                          | description 差则选不中                             | 技能页加"试跑"（给定任务看模型会不会选它、命中了什么）；索引拼装加去重与长度上限                                                                                | 一次可见的诊断输出                                          |
-| P1     | **失败可恢复**                            | 网络抖动/429 目前直接 `turn-end=error`             | 网关侧指数退避重试（仅幂等请求）；UI 保留"重试本轮"入口（重放同一 userText）                                                                                    | 断网注入用例：重试成功 / 超限后退化为错误提示               |
-| P2     | 结构化待办工具（`todo` 内置工具）         | 外循环与过程可视化的共同前置                       | 产出 `todos` 表 + 工具，Chat 侧渲染进度条                                                                                                                       | 与 P1 外循环配套验收                                        |
-| P2     | 结果区增强                                | 交付体验                                           | 预览支持 HTML/PDF/图片；产物一键"复制到新任务"                                                                                                                  | 手工验收                                                    |
-| P2     | 国际化 / 无障碍 / 键盘全操作              | 分发面扩大后再做                                   | i18n 资源抽层（文案量大，需专门一轮）                                                                                                                           | —                                                           |
-| P2     | 代码签名证书评估                          | 消除 SmartScreen                                   | 商用阶段决定                                                                                                                                                    | —                                                           |
+| 优先级 | 项                                           | 动机                                                                | 做法（含接缝）                                                                                                                                                  | 验收                                                        |
+| ------ | -------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| P0     | **迭代上限可配置**                           | 6 轮对"读代码→改→跑→修"偏紧，撞上限只能靠收尾 pass                  | `AppPrefs.maxIterations`（默认仍 6，上限如 20）→ `ipc.AgentSend` 传入引擎；设置页"权限与安全"组加滑条                                                           | 改完即生效、重启保持；单测覆盖"传 1 时确实只跑 1 轮 + 收尾" |
+| P0     | **上下文用量可见 + 裁剪策略**                | 长会话 token 线性涨，撞窗口后行为不可预期                           | 先做"可见"（估算字符/轮数显示在 Composer 状态区），再做"裁剪"：保留 system + 最近 N 轮 + 更早摘要为一条 system 注记                                             | 长会话不崩、可复现的截断行为；纯函数单测                    |
+| P1     | **外循环 + 预算护栏**（**当前明确暂缓**）    | 复杂任务需要"目标未达成自动续跑"                                    | 不无脑重跑 turn：先在 `turn-end` 处判定"是否有未完成事项"（模型自评 + 待办清单工具），续跑要有**三重预算**——累计轮数 / token / 墙钟时间，任一触顶即停并交代现状 | 判停单测 + 人工长任务实测                                   |
+| P1     | **技能选择质量**                             | description 差则选不中                                              | 技能页加"试跑"（给定任务看模型会不会选它、命中了什么）；索引拼装加去重与长度上限                                                                                | 一次可见的诊断输出                                          |
+| P1     | **失败可恢复**                               | 网络抖动/429 目前直接 `turn-end=error`                              | 网关侧指数退避重试（仅幂等请求）；UI 保留"重试本轮"入口（重放同一 userText）                                                                                    | 断网注入用例：重试成功 / 超限后退化为错误提示               |
+| P1     | **项目空间二期（看板 / 动态流 / 定时任务）** | 一期只把"空间 = 目录 + 指令 + 资产"打通，缺"进展到哪"与"到点自动跑" | 看板依赖下面的结构化待办工具；动态流由 sessions/artifacts 时间线派生（不新增写路径）；定时任务复用 headless 引擎，不得绕开批准门                                | 看板改状态入库不丢；定时任务产出的文件能出现在空间资产页    |
+| P2     | 结构化待办工具（`todo` 内置工具）            | 外循环与过程可视化的共同前置                                        | 产出 `todos` 表 + 工具，Chat 侧渲染进度条                                                                                                                       | 与 P1 外循环配套验收                                        |
+| P2     | 结果区增强                                   | 交付体验                                                            | 预览支持 HTML/PDF/图片；产物一键"复制到新任务"                                                                                                                  | 手工验收                                                    |
+| P2     | 国际化 / 无障碍 / 键盘全操作                 | 分发面扩大后再做                                                    | i18n 资源抽层（文案量大，需专门一轮）                                                                                                                           | —                                                           |
+| P2     | 代码签名证书评估                             | 消除 SmartScreen                                                    | 商用阶段决定                                                                                                                                                    | —                                                           |
 
 ### 10.2 二期：服务端化与团队协作（预留已核对，见检查表）
 
@@ -498,14 +534,14 @@ pnpm format                  # prettier --write
 ```
 src/
   main/
-    agent/        engine.ts + engine.spec.ts + engine-headless.spec.ts
+    agent/        engine.ts + project-prompt.ts（+ spec）+ engine-headless.spec.ts
     llm/          gateway.ts / sse.ts（+ spec）
     tools/        registry.ts types.ts index.ts builtin/{filesystem,terminal,web,use_skill}.ts
-    workspace/    provider.ts local.ts browse.ts（+ spec）
+    workspace/    provider.ts local.ts browse.ts browse-root.ts（+ spec）
     skills/       loader.ts registry.ts manager.ts hub.ts zip.ts types.ts（+ spec）
     mcp/          manager.ts hub.ts token.ts（+ spec）
     permissions/  gate.ts（+ spec）
-    db/           store.ts（+ spec）
+    db/           store.ts（sessions/messages/artifacts/skills/mcp_servers/settings_kv/projects，+ spec）
     apps.ts       IDE 探测/打开（+ spec）
     settings.ts   模型配置与加密（+ spec）
     ipc.ts        通道注册与事件转发
@@ -514,10 +550,11 @@ src/
   preload/        index.ts（能力白名单）+ index.d.ts
   shared/         types.ts（数据模型）+ ipc.ts（通道常量）
   renderer/src/
-    pages/        Home / Chat / Skills / Mcp / Settings
+    pages/        Home / Chat / Skills / Mcp / Settings / Projects / ProjectDetail
     components/   Composer ToolCallCard ApprovalPanel ResultPanel TaskOpenMenu
+                  WorkspaceBrowser workspace-preview
                   Onboarding UpdateDialog Markdown scrollbar-reveal mcp-detail tool-display
-    stores/       agent.ts（内含 turn-reducer） settings.ts skills.ts
+    stores/       agent.ts（内含 turn-reducer） settings.ts skills.ts projects.ts
     assets/       main.css（设计 token + 全局样式含滚动条）
 docs/
   adr/ADR-0001-技术选型与架构命门.md
@@ -527,15 +564,17 @@ docs/
 
 ### 11.3 术语表
 
-| 术语                | 含义                                                                 |
-| ------------------- | -------------------------------------------------------------------- |
-| turn                | 一条用户消息引发的完整 Agent 过程（可能含多轮工具调用）              |
-| 迭代（iter）        | turn 内的一次"LLM 调用 + 工具执行"，上限 `maxIterations`             |
-| 渐进式披露          | 技能先以轻量索引进提示词，命中后才加载完整正文                       |
-| 可信根（readRoots） | 允许读取但不允许写入的额外目录（技能目录）                           |
-| 产物（artifact）    | 工具产出的可交付物：本地文件或链接，落 `artifacts` 表                |
-| 过程组              | UI 把一轮内的思考/工具/中间说明折叠成一块，最终答复外露              |
-| 命门                | 项目里"一旦破坏就不可逆"的两条架构约束（引擎纯逻辑、Workspace 抽象） |
+| 术语                   | 含义                                                                  |
+| ---------------------- | --------------------------------------------------------------------- |
+| turn                   | 一条用户消息引发的完整 Agent 过程（可能含多轮工具调用）               |
+| 迭代（iter）           | turn 内的一次"LLM 调用 + 工具执行"，上限 `maxIterations`              |
+| 渐进式披露             | 技能先以轻量索引进提示词，命中后才加载完整正文                        |
+| 可信根（readRoots）    | 允许读取但不允许写入的额外目录（技能目录）                            |
+| 产物（artifact）       | 工具产出的可交付物：本地文件或链接，落 `artifacts` 表                 |
+| 项目空间（project）    | 一个工作目录 + 一份项目指令的集合；空间内任务共用目录，见 §6.14       |
+| 浏览根（BrowseTarget） | 只读浏览的寻址选择器 `{sessionId?, projectId?}`，由主进程解析成沙箱根 |
+| 过程组                 | UI 把一轮内的思考/工具/中间说明折叠成一块，最终答复外露               |
+| 命门                   | 项目里"一旦破坏就不可逆"的两条架构约束（引擎纯逻辑、Workspace 抽象）  |
 
 ---
 
