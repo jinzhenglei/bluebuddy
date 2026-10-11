@@ -76,7 +76,7 @@ pnpm test        # vitest run
 pnpm format      # prettier --write
 ```
 
-提交前三项必须全绿。当前 **309** 个测试用例（27 个 spec 文件）。测试环境是 `node`（无 jsdom），因此渲染层的逻辑一律把纯函数抽出来测（如 `turn-reducer.ts`、`scrollbar-reveal.ts`、`mcp-detail.ts`）。
+提交前三项必须全绿。当前 **310** 个测试用例（27 个 spec 文件）。测试环境是 `node`（无 jsdom），因此渲染层的逻辑一律把纯函数抽出来测（如 `turn-reducer.ts`、`scrollbar-reveal.ts`、`mcp-detail.ts`）。
 
 规格与决策文档：
 

@@ -57,7 +57,7 @@
 | 主进程             | 53 文件 / 8,487 行（含 22 个 spec）                                                            |
 | 渲染层             | 34 文件 / 6,940 行（含 5 个 spec）                                                             |
 | 共享类型 + preload | 4 文件 / 837 行                                                                                |
-| 单测               | **309 passed**（27 个 spec 文件，`vitest run` exit 0）                                         |
+| 单测               | **310 passed**（27 个 spec 文件，`vitest run` exit 0）                                         |
 | 门禁               | typecheck(node/web) ✅ · eslint 零告警 ✅ · prettier ✅                                        |
 | 运行环境           | Electron 39.8.10 / React 19.2 / TS 5.9 / Tailwind 4.3 / Vite 7.2 / better-sqlite3 13 / zod 4.6 |
 
@@ -339,14 +339,15 @@ v9 的两个细节记下来当参考：
 
 **浏览根归一（本期唯一的破坏性改造）**：`workspace:list-dir` / `read-file` 首参从 `sessionId: string` 改成选择器 `BrowseTarget = { sessionId?, projectId? }`，主进程用纯函数 `resolveBrowseRoot(db, target)` 解析沙箱根（会话取 `session.workDir`，空间取 `project.work_dir`，sessionId 优先；都找不到就报错，**绝不回退到进程 cwd 或猜根**）。收益很直接：空间资产页不用另开一套浏览接口，目录树/预览与对话页共用同一实现。代价是调用方全改（本仓库内只有 `ResultPanel` 与两个新页面）。
 
-**IPC**：`projects:list / create / update / delete / artifacts` 五个通道。写操作返回 `{ok, project?, error?}` 信封（跟 `skills.import` / `mcp.add` 既有风格一致），读操作返裸数组。`artifacts` 返回项附 `sessionTitle`，资产表才能说出"这份文件是哪个任务交的"。
+**IPC**：`projects:list / create / update / delete / artifacts` 五个通道。写操作返回 `{ok, project?, error?}` 信封（跟 `skills.import` / `mcp.add` 既有风格一致），读操作返裸数组。`artifacts` 返回项附 `sessionTitle`，资产表才能说出"这份文件是哪个任务交的"。`update` 是 patch 语义，且主进程会**丢掉与库内值相同的字段**——渲染层很容易把"解析出来的值"原样回传（比如把兜底模型当成当前值提交），这一层过滤防止空格子被伪改动填成实值。
 
 **UI**：侧边栏「新建任务」下方加「项目空间」→ 空间卡片网格（名称 / 目录 / 任务数 / 产出数 / 最近产出）+「新建项目」弹窗→ 详情页：面包屑、「在 IDE 打开」、删除空间，**任务 / 资产** 双 Tab，底部 Composer，右栏空间配置（指令失焦保存）。在空间里提问就是"新建任务并立即执行"，沿用首页的标题截断与 provider 校验规则（无可用模型时明说去设置，不静默失败）。旧任务列表与搜索完全没动。
 
-**两个动手才发现的坑**（都是"首帧没数据"这一类）：
+**三个动手才发现的坑**（前两个都是"首帧没数据"这一类）：
 
 - 配置面板草稿拿 `project?.name ?? ''` 做 `useState` 初值——首帧空间列表还没 `load` 回来，草稿就是空串，用户在「项目指令」框失焦时会把已有指令**写成空**。改成"草稿只在用户真编辑过才非空"（`string | null` + `?? 库内值`），保存成功才交还库内值，失败保留草稿。教训：**失焦即保存的字段，初值不能拿异步数据**。
 - 空间详情页新建任务后走 `openSession(id)`，而 `createSession` 内部已经 `selectSession` 过一次；再 select 一次会用库内快照把**乐观显示的用户消息盖掉**（看着像提问没发出去）。`openSession` 加了 `activeSessionId !== id` 守卫。教训：同一个动作在 store 里已有副作用时，壳层要只做路由。
+- 底部 Composer 的模型下拉一开始直接绑到"改空间默认模型"的 handler 上：用户只是换个模型看一眼（不发送、不提问），空间的 `provider_id` 就被**写库锁死**成那一个，此后改应用默认对该空间彻底失效。改成与首页同构——Composer 的模型是**本次提问的本地态**（优先级：本次手选 > 空间默认 > 应用默认 > 第一个可用），只有右栏「空间配置」那个选择器才写库。教训：**临时选择器和持久配置项绝不能共用同一个 onChange**，这类问题单测看不出来，必须走一遍 UI。
 
 一期明确不做：计划看板、动态时间线、定时任务、独立资产归档区（多目录/网盘式）、空间级技能与连接器覆盖、成员与协作（本地单用户）、产物摘要的向量化检索。
 
@@ -389,7 +390,7 @@ prettier --write .                                  # 格式化（改到的文�
 tsc --noEmit -p tsconfig.node.json --composite false
 tsc --noEmit -p tsconfig.web.json  --composite false
 eslint --cache .                                    # 警告也必须清零
-vitest run                                          # 309 passed, exit 0
+vitest run                                          # 310 passed, exit 0
 ```
 
 **提交纪律**：Conventional Commits（中文正文写清动机与取舍）；**按路径选择性 `git add`**（绝不 `git add .`，避免把共享工作区里别人的改动或生成目录一起卷进来）；`.kb/`、`docs/wiki/`、`plugins/repo-wiki/` 这类生成物不纳入跟踪。
