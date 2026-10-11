@@ -687,6 +687,15 @@ describe('DbStore projects（项目空间）', () => {
     expect(store.getProject(p.id)).toMatchObject({ name: 'b', instructions: '', workDir: '/w2' })
   })
 
+  it('updateProject 传 providerId 空串即清空为未设置（空间的「跟随应用默认」依赖此语义）', () => {
+    const p = store.createProject({ name: 'a', workDir: '/w', providerId: 'p1' })
+    expect(store.updateProject(p.id, { providerId: '' })?.providerId).toBeUndefined()
+    // 清空后再改其它字段不会把它悄悄补回来
+    expect(store.updateProject(p.id, { name: 'b' })?.providerId).toBeUndefined()
+    const kept = store.createProject({ name: 'c', workDir: '/w', providerId: 'p2' })
+    expect(store.updateProject(kept.id, { name: 'd' })?.providerId).toBe('p2')
+  })
+
   it('createSession 可挂到空间下，listSessionsByProject 只返回该空间任务', () => {
     const p = store.createProject({ name: 'a', workDir: '/w' })
     const inSpace = store.createSession({

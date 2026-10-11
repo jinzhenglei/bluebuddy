@@ -53,7 +53,6 @@ export function ProjectDetailPage({
   const [tab, setTab] = useState<'tasks' | 'assets'>('tasks')
   const [input, setInput] = useState('')
   const [hint, setHint] = useState<string | null>(null)
-  const [providerId, setProviderId] = useState('')
   const [prefs, setPrefs] = useState<AppPrefs | null>(null)
   // 配置面板草稿：只有用户真的编辑过才非空，失焦保存成功后交还库内值。
   // 初值不能直接取 project 字段 —— 首帧空间数据还没 load 回来，失焦会把已有指令清空。
@@ -63,6 +62,7 @@ export function ProjectDetailPage({
   const instrValue = instrDraft ?? project?.instructions ?? ''
 
   // 引用稳定：资产页目录树按空间解析浏览根
+  const browseRoot = project?.workDir ?? ''
   const target = useMemo(() => ({ projectId }), [projectId])
   const {
     preview,
@@ -81,15 +81,17 @@ export function ProjectDetailPage({
     [sessions, projectId]
   )
 
-  // 优先级：输入框手选 > 空间默认模型 > 应用默认模型 > 第一个可用 Provider
-  const effectiveProvider = providerId || project?.providerId || prefs?.defaultProviderId || ''
-  const chosenProvider = providers.find((p) => p.id === effectiveProvider)
-  const fallbackProvider = chosenProvider ?? providers[0]
+  // composer 里手选的模型只影响本次提问（与新建任务页同构），不能写回空间默认：
+  // 否则用户在输入框上看一眼模型，空间就被锁死成那一个，之后改应用默认对该空间无效。
+  const [askProviderId, setAskProviderId] = useState('')
+  // 优先级：本次提问手选 > 空间默认模型 > 应用默认模型 > 第一个可用 Provider
+  const askProviderIdOrFallback =
+    askProviderId || project?.providerId || prefs?.defaultProviderId || providers[0]?.id || ''
 
   const submit = async (): Promise<void> => {
     const text = input.trim()
     if (!text || !project) return
-    if (!fallbackProvider) {
+    if (!askProviderIdOrFallback) {
       setHint('还没有可用的模型服务，请先到「设置」中添加')
       return
     }
@@ -98,7 +100,7 @@ export function ProjectDetailPage({
     const s = await createSession({
       title,
       workDir: project.workDir,
-      providerId: fallbackProvider.id,
+      providerId: askProviderIdOrFallback,
       projectId: project.id
     })
     setInput('')
@@ -153,8 +155,8 @@ export function ProjectDetailPage({
   }
 
   const changeProvider = async (id: string): Promise<void> => {
-    setProviderId(id)
-    if (project) await updateProject(project.id, { providerId: id })
+    if (!project || id === (project.providerId ?? '')) return
+    await updateProject(project.id, { providerId: id })
   }
 
   const deleteSpace = async (): Promise<void> => {
@@ -310,7 +312,11 @@ export function ProjectDetailPage({
                     {project?.workDir}
                   </span>
                 </div>
-                <WorkspaceTree key={projectId} target={target} onOpenFile={openFile} />
+                <WorkspaceTree
+                  key={`${projectId}:${browseRoot}`}
+                  target={target}
+                  onOpenFile={openFile}
+                />
               </div>
             </div>
           )}
@@ -322,8 +328,8 @@ export function ProjectDetailPage({
               onChange={setInput}
               onSubmit={() => void submit()}
               providers={providers}
-              providerId={fallbackProvider?.id ?? ''}
-              onProviderChange={(id) => void changeProvider(id)}
+              providerId={askProviderIdOrFallback}
+              onProviderChange={setAskProviderId}
               placeholder={`在本空间提问，产出会归入${project?.name ? `「${project.name}」` : '这个空间'}的资产`}
             />
             {hint && <p className="mt-2 text-sm text-red-500">{hint}</p>}
@@ -360,10 +366,10 @@ export function ProjectDetailPage({
           <FieldLabel>默认模型</FieldLabel>
           <select
             className="w-full rounded-lg border border-line bg-surface px-2.5 py-1.5 text-sm text-ink outline-none"
-            value={fallbackProvider?.id ?? ''}
+            value={project?.providerId ?? ''}
             onChange={(e) => void changeProvider(e.target.value)}
           >
-            {providers.length === 0 && <option value="">未配置模型</option>}
+            <option value="">{providers.length ? '跟随应用默认' : '未配置模型'}</option>
             {providers.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name} · {p.model}

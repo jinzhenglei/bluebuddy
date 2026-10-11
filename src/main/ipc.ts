@@ -232,12 +232,19 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     return { ok: true, project }
   })
   ipcMain.handle(IPC_CHANNELS.ProjectsUpdate, (_e, id: string, patch: ProjectPatch) => {
-    if (!db.getProject(id)) return { ok: false, error: '项目空间不存在' }
+    const existing = db.getProject(id)
+    if (!existing) return { ok: false, error: '项目空间不存在' }
     const next: ProjectPatch = { ...patch }
     if (next.name !== undefined) next.name = next.name.trim()
     if (next.workDir !== undefined) next.workDir = next.workDir.trim()
     if (next.name !== undefined && !next.name) return { ok: false, error: '项目名称不能为空' }
     if (next.workDir !== undefined && !next.workDir) return { ok: false, error: '工作目录不能为空' }
+    // 与库内值相同的字段直接丢弃：省掉无谓写入，也避免渲染层「把解析出的值原样回传」
+    // 这类伪改动把空格子填成实值（providerId 空串在 store 层就是清空，两侧语义一致）
+    if (next.name === existing.name) delete next.name
+    if (next.instructions === (existing.instructions ?? '')) delete next.instructions
+    if (next.providerId === (existing.providerId ?? '')) delete next.providerId
+    if (next.workDir === existing.workDir) delete next.workDir
     return { ok: true, project: db.updateProject(id, next) }
   })
   // 只删空间行：FK 把其下任务的 project_id 置 NULL（任务与产物全留），不碰磁盘任何文件
