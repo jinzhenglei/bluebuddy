@@ -14,6 +14,7 @@ import type {
   McpServerInfo,
   McpServerStatus,
   McpTransport,
+  ProjectAssetsResult,
   ProjectCreateInput,
   ProjectInfo,
   ProjectPatch,
@@ -79,6 +80,8 @@ interface ProjectsApi {
   ) => Promise<{ ok: boolean; project?: ProjectInfo; error?: string }>
   remove: (id: string) => Promise<{ ok: boolean }>
   artifacts: (projectId: string) => Promise<ArtifactInfo[]>
+  /** 统一资产列表：任务产物 + 按配置实时扫描工作目录的其他途径产物 */
+  assets: (projectId: string) => Promise<ProjectAssetsResult>
 }
 
 interface SkillsApi {

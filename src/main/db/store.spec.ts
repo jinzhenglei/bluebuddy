@@ -4,6 +4,7 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { ChatMessage } from '@shared/types'
+import { DEFAULT_ASSET_EXTS } from '@shared/asset-config'
 import { DbStore } from './store'
 
 let store: DbStore
@@ -696,6 +697,57 @@ describe('DbStore projects（项目空间）', () => {
     expect(store.updateProject(kept.id, { name: 'd' })?.providerId).toBe('p2')
   })
 
+  it('updateProject 的 assetConfig 是字段级合并：只传 filter 不会顶掉已存的扩展名清单', () => {
+    const p = store.createProject({ name: 'a', workDir: '/w' })
+    // 新建一律走默认配置，不多存一列冗余 JSON
+    expect(p.assetConfig).toBeUndefined()
+    store.updateProject(p.id, { assetConfig: { includeExts: ['md', 'pdf'] } })
+    store.updateProject(p.id, { assetConfig: { filter: 'other' } })
+    expect(store.getProject(p.id)?.assetConfig).toEqual({
+      includeExts: ['md', 'pdf'],
+      filter: 'other'
+    })
+    // 传 null 整体清空，回落默认
+    expect(store.updateProject(p.id, { assetConfig: null })?.assetConfig).toBeUndefined()
+  })
+
+  it('updateProject 传空数组是清掉该字段的覆盖（写库路径上只有这里合一次）', () => {
+    const p = store.createProject({ name: 'a', workDir: '/w' })
+    store.updateProject(p.id, { assetConfig: { includeExts: ['ts', 'md'], filter: 'other' } })
+    expect(store.updateProject(p.id, { assetConfig: { includeExts: [] } })?.assetConfig).toEqual({
+      filter: 'other'
+    })
+    // filter 没被顶掉；扩展名不再存库，读时自动回到默认清单
+    expect(store.getProject(p.id)?.assetConfig?.includeExts).toBeUndefined()
+  })
+
+  it('先写扩展名覆盖再切过滤开关，两个字段都要留在库里', () => {
+    // 回归：资产页开关看起来“没记住”，就出在这种连写两次的路径上
+    const p = store.createProject({ name: 'a', workDir: '/w' })
+    store.updateProject(p.id, { assetConfig: { includeExts: ['ts', 'md'] } })
+    store.updateProject(p.id, { assetConfig: { includeExts: ['ts', 'md'], filter: 'other' } })
+    expect(store.getProject(p.id)?.assetConfig).toEqual({
+      includeExts: ['ts', 'md'],
+      filter: 'other'
+    })
+  })
+
+  it('assetConfig 里等于默认清单或全无效的部分不落库（否则空间会被钉死在旧默认上）', () => {
+    const p = store.createProject({ name: 'a', workDir: '/w' })
+    expect(
+      store.updateProject(p.id, {
+        assetConfig: { includeExts: DEFAULT_ASSET_EXTS, ignoreDirs: [], filter: 'all' }
+      })?.assetConfig
+    ).toBeUndefined()
+    expect(
+      store.updateProject(p.id, { assetConfig: { includeExts: ['', '  '] } })?.assetConfig
+    ).toBeUndefined()
+    // 真正收窄了默认清单是要保留的
+    expect(
+      store.updateProject(p.id, { assetConfig: { includeExts: ['.MD', 'md', 'pdf'] } })?.assetConfig
+    ).toEqual({ includeExts: ['md', 'pdf'] })
+  })
+
   it('createSession 可挂到空间下，listSessionsByProject 只返回该空间任务', () => {
     const p = store.createProject({ name: 'a', workDir: '/w' })
     const inSpace = store.createSession({
@@ -823,6 +875,81 @@ describe('DbStore projects（项目空间）', () => {
       expect(upgraded.listArtifactsByProject(p.id).map((a) => a.name)).toEqual(['旧产物.md'])
     } finally {
       upgraded.close()
+    }
+  })
+
+  it('旧 v9 库打开时自动迁移到 v10（projects 多出 asset_config，旧空间与归属关系完好）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-migrate-v10-'))
+    const file = path.join(dir, 'db.sqlite')
+    const raw = new Database(file)
+    raw.exec(`
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        work_dir TEXT NOT NULL,
+        instructions TEXT,
+        provider_id TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        work_dir TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        project_id TEXT REFERENCES projects(id) ON DELETE SET NULL
+      );
+      CREATE TABLE artifacts (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        call_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        name TEXT NOT NULL,
+        rel_path TEXT,
+        url TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_sessions_project ON sessions(project_id, created_at);
+    `)
+    raw.pragma('user_version = 9')
+    raw
+      .prepare(
+        `INSERT INTO projects (id, name, work_dir, instructions, provider_id, created_at)
+       VALUES ('p1', '旧空间', '/x', '旧指令', 'prov', 1)`
+      )
+      .run()
+    raw.prepare(`INSERT INTO sessions VALUES ('s1', 'old', '/x', 'prov', 2, 'p1')`).run()
+    raw.close()
+
+    const upgraded = new DbStore(file)
+    try {
+      // 旧空间字段完好，新列对旧数据就是「未配置」
+      expect(upgraded.getProject('p1')).toMatchObject({
+        name: '旧空间',
+        workDir: '/x',
+        instructions: '旧指令',
+        providerId: 'prov'
+      })
+      expect(upgraded.getProject('p1')?.assetConfig).toBeUndefined()
+      // 旧归属关系没被动过，新列可写可读
+      expect(upgraded.listSessionsByProject('p1').map((s) => s.id)).toEqual(['s1'])
+      expect(
+        upgraded.updateProject('p1', { assetConfig: { filter: 'other' } })?.assetConfig
+      ).toEqual({ filter: 'other' })
+    } finally {
+      upgraded.close()
+    }
+
+    // 库里存了脏 JSON：当作未配置读回，不能拖垮整个空间列表
+    const dirty = new Database(file)
+    dirty.prepare(`UPDATE projects SET asset_config = '{"includeExts": '`).run()
+    dirty.close()
+    const reopened = new DbStore(file)
+    try {
+      expect(reopened.listProjects().map((p) => p.id)).toEqual(['p1'])
+      expect(reopened.getProject('p1')?.assetConfig).toBeUndefined()
+    } finally {
+      reopened.close()
     }
   })
 

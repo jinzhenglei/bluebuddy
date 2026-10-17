@@ -36,12 +36,13 @@ export const IPC_CHANNELS = {
   WorkspaceListDir: 'workspace:list-dir',
   WorkspaceReadFile: 'workspace:read-file',
 
-  // 项目空间：列表/新建/改/删/跨任务产物聚合
+  // 项目空间：列表/新建/改/删/跨任务产物聚合/统一资产列表
   ProjectsList: 'projects:list',
   ProjectsCreate: 'projects:create',
   ProjectsUpdate: 'projects:update',
   ProjectsDelete: 'projects:delete',
   ProjectsArtifacts: 'projects:artifacts',
+  ProjectsAssets: 'projects:assets',
 
   // 技能管理（Stage 4）：列表/启停/删除/本地导入
   SkillsList: 'skills:list',

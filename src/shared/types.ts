@@ -75,6 +75,22 @@ export interface SessionInfo {
   projectId?: string
 }
 
+/** 资产页过滤开关：全部 / 仅任务生成 / 仅其他途径 */
+export type AssetFilter = 'all' | 'task' | 'other'
+
+/**
+ * 空间资产识别配置（存 projects.asset_config 的 JSON）。
+ * 字段缺省或空数组都表示“用默认”，所以写库前会被瘦身，全默认时整列存 NULL。
+ */
+export interface ProjectAssetConfig {
+  /** 参与“其他途径产物”识别的扩展名（不含点、小写） */
+  includeExts?: string[]
+  /** 扫描时整棵剪枝的目录名（任意层级路径段命中） */
+  ignoreDirs?: string[]
+  /** 资产页开关，记在空间上以跨重启生效 */
+  filter?: AssetFilter
+}
+
 /** 项目空间：绑定一个工作目录，空间内任务共用该目录与项目指令 */
 export interface ProjectInfo {
   id: string
@@ -84,6 +100,8 @@ export interface ProjectInfo {
   instructions?: string
   /** 空间默认模型 */
   providerId?: string
+  /** 资产识别配置；未配置或脏数据读出 undefined（= 全用默认） */
+  assetConfig?: ProjectAssetConfig
   createdAt: number
 }
 
@@ -101,6 +119,38 @@ export interface ProjectPatch {
   instructions?: string
   providerId?: string
   workDir?: string
+  /** null = 清空回落默认；对象则按字段合并，未传字段保持原值 */
+  assetConfig?: ProjectAssetConfig | null
+}
+
+/** 产物来源：任务写文件登记的 / 其他途径产生（实时扫工作目录得出） */
+export type AssetSource = 'task' | 'other'
+
+/** 空间资产页与上下文注入共用的统一条目 */
+export interface ProjectAssetEntry {
+  /** 列表 key：同一文件只会归一类，不会同时出两行 */
+  key: string
+  source: AssetSource
+  name: string
+  /** 相对空间工作目录，正斜杠 */
+  relPath: string
+  absPath: string
+  /** 排序用时间：任务产物取登记时间，其他途径取文件 mtime */
+  time: number
+  size?: number
+  /** 仅任务产物有：来源任务标题 */
+  sessionTitle?: string
+}
+
+/** 统一资产列表（projects:assets 的返回） */
+export interface ProjectAssetsResult {
+  /** 工作目录不可访问时为 false；此时 assets 仍含任务产物，UI 另显错误条 */
+  ok: boolean
+  assets: ProjectAssetEntry[]
+  counts: { all: number; task: number; other: number }
+  /** 扫描命中条数上限，还有文件未列出 */
+  truncated: boolean
+  error?: string
 }
 
 /** 产物记录（与主进程 DbStore 保持列段同构，relPath/url 其中一个未设时为 undefined） */

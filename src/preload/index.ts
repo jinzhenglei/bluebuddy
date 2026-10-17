@@ -16,6 +16,7 @@ import type {
   McpServerInfo,
   McpServerStatus,
   McpTransport,
+  ProjectAssetsResult,
   ProjectCreateInput,
   ProjectInfo,
   ProjectPatch,
@@ -102,7 +103,10 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.ProjectsDelete, id),
     /** 空间内跨任务产物（新的在前，同 relPath 只留最新一条） */
     artifacts: (projectId: string): Promise<ArtifactInfo[]> =>
-      ipcRenderer.invoke(IPC_CHANNELS.ProjectsArtifacts, projectId)
+      ipcRenderer.invoke(IPC_CHANNELS.ProjectsArtifacts, projectId),
+    /** 统一资产列表：任务产物 + 按配置实时扫描出的其他途径文件，同一文件只归一类 */
+    assets: (projectId: string): Promise<ProjectAssetsResult> =>
+      ipcRenderer.invoke(IPC_CHANNELS.ProjectsAssets, projectId)
   },
   skills: {
     list: (): Promise<SkillInfo[]> => ipcRenderer.invoke(IPC_CHANNELS.SkillsList),

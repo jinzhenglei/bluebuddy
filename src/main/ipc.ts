@@ -13,6 +13,7 @@ import type {
   IdeAppView,
   McpServerInfo,
   McpTransport,
+  ProjectAssetsResult,
   ProjectCreateInput,
   ProjectPatch,
   ProviderConfig,
@@ -28,6 +29,8 @@ import { LocalWorkspace } from './workspace/local'
 import { listDir, readFilePreview } from './workspace/browse'
 import { resolveBrowseRoot } from './workspace/browse-root'
 import { buildProjectPromptSection } from './agent/project-prompt'
+import { collectProjectAssets } from './agent/project-assets'
+import { planAssetConfigWrite, resolveAssetConfig } from '@shared/asset-config'
 import { SkillRegistry } from './skills/registry'
 import { SkillManager } from './skills/manager'
 import { HubClient } from './skills/hub'
@@ -245,6 +248,12 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     if (next.instructions === (existing.instructions ?? '')) delete next.instructions
     if (next.providerId === (existing.providerId ?? '')) delete next.providerId
     if (next.workDir === existing.workDir) delete next.workDir
+    if (next.assetConfig !== undefined) {
+      // 合并只用来识别伪改动；真要写下去的是原始 patch，store 层自己合一次
+      const write = planAssetConfigWrite(existing.assetConfig, next.assetConfig)
+      if (write === undefined) delete next.assetConfig
+      else next.assetConfig = write
+    }
     return { ok: true, project: db.updateProject(id, next) }
   })
   // 只删空间行：FK 把其下任务的 project_id 置 NULL（任务与产物全留），不碰磁盘任何文件
@@ -252,7 +261,7 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     db.deleteProject(id)
     return { ok: true }
   })
-  // 跨任务产物（资产表数据源）：absPath 以空间工作目录为基，sessionTitle 标明来源任务
+  // 跨任务产物（列表页卡片统计）：absPath 以空间工作目录为基，sessionTitle 标明来源任务
   ipcMain.handle(IPC_CHANNELS.ProjectsArtifacts, (_e, projectId: string) => {
     const project = db.getProject(projectId)
     if (!project) return []
@@ -260,6 +269,20 @@ export function registerIpcHandlers(deps: IpcDeps): void {
       ...a,
       absPath: path.resolve(project.workDir, a.relPath ?? '')
     }))
+  })
+  // 统一资产列表（空间资产页数据源）：任务产物 + 其他途径文件，同一文件只归一类
+  ipcMain.handle(IPC_CHANNELS.ProjectsAssets, (_e, projectId: string): ProjectAssetsResult => {
+    const project = db.getProject(projectId)
+    if (!project) {
+      return {
+        ok: false,
+        assets: [],
+        counts: { all: 0, task: 0, other: 0 },
+        truncated: false,
+        error: '项目空间不存在'
+      }
+    }
+    return collectProjectAssets(db, project, resolveAssetConfig(project.assetConfig))
   })
 
   // 工作区只读浏览（对话页结果区 + 空间资产页）：沙箱根由选择器解析，越界由 browse 层抛错
@@ -610,11 +633,15 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     const skillIndex = skillRegistry.indexForPrompt()
     let systemPrompt = skillIndex ? `${BASE_SYSTEM_PROMPT}\n\n${skillIndex}` : BASE_SYSTEM_PROMPT
 
-    // 项目空间：注入空间身份 + 项目指令 + 已有产出清单（同样每轮现拼，不入库）
+    // 项目空间：注入空间身份 + 项目指令 + 已有产出清单（任务产物与其他途径文件同地位；
+    // 同样每轮现拼，不入库）
     if (session.projectId) {
       const project = db.getProject(session.projectId)
       if (project) {
-        const section = buildProjectPromptSection(project, db.listArtifactsByProject(project.id))
+        const section = buildProjectPromptSection(
+          project,
+          collectProjectAssets(db, project, resolveAssetConfig(project.assetConfig)).assets
+        )
         if (section) systemPrompt = `${systemPrompt}\n\n${section}`
       }
     }

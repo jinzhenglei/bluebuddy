@@ -2,14 +2,13 @@ import { describe, it, expect } from 'vitest'
 import {
   PROJECT_ARTIFACT_LIMIT,
   buildProjectPromptSection,
-  type ProjectPromptArtifact,
+  type ProjectPromptAsset,
   type ProjectPromptInput
 } from './project-prompt'
 
-/** 造 n 条文件产物 */
-function files(n: number, prefix = 'out'): ProjectPromptArtifact[] {
+/** 造 n 条产出条目 */
+function files(n: number, prefix = 'out'): ProjectPromptAsset[] {
   return Array.from({ length: n }, (_, i) => ({
-    kind: 'file' as const,
     name: `${prefix}${i}.md`,
     relPath: `docs/${prefix}${i}.md`,
     sessionTitle: '任务甲'
@@ -38,7 +37,7 @@ describe('buildProjectPromptSection（项目空间上下文注入）', () => {
 
   it('只有产物：输出产出清单，含文件名、相对路径与来源任务', () => {
     const out = buildProjectPromptSection({ name: 'x', workDir: '/x', instructions: null }, [
-      { kind: 'file', name: '报告.md', relPath: 'docs/报告.md', sessionTitle: '写年报' }
+      { name: '报告.md', relPath: 'docs/报告.md', sessionTitle: '写年报' }
     ])
     expect(out).toContain('已有产出')
     expect(out).toContain('报告.md')
@@ -46,20 +45,28 @@ describe('buildProjectPromptSection（项目空间上下文注入）', () => {
     expect(out).toContain('写年报')
   })
 
-  it('link 类与缺 relPath 的产物被排除；全被排除时不输出产出段', () => {
+  it('其他途径的条目（无来源任务）不带「来自」段', () => {
     const out = buildProjectPromptSection({ name: 'x', workDir: '/x' }, [
-      { kind: 'link', name: 'HN', relPath: undefined, sessionTitle: 't' },
-      { kind: 'file', name: '无路径', relPath: undefined, sessionTitle: 't' }
+      { name: '手册.md', relPath: 'docs/手册.md' }
+    ])
+    expect(out).toContain('- 手册.md（docs/手册.md）')
+    expect(out).not.toContain('来自')
+  })
+
+  it('缺 relPath 的条目被跳过；全被跳过时不输出产出段', () => {
+    const out = buildProjectPromptSection({ name: 'x', workDir: '/x' }, [
+      { name: '无路径', relPath: undefined, sessionTitle: 't' }
     ])
     expect(out).toBe('')
   })
 
-  it('link 的 url 绝不进入提示词（避免把带 token 的链接喂给模型）', () => {
+  it('入参里多余的 url/内容字段不会泄进提示词（防带 token 的链接被喂给模型）', () => {
     const out = buildProjectPromptSection(project, [
-      { kind: 'link', name: '带密钥链接', url: 'https://h?token=SECRET' } as never,
-      { kind: 'file', name: 'a.md', relPath: 'a.md', sessionTitle: 't' }
+      { name: '带密钥链接', url: 'https://h?token=SECRET', content: '正文' } as never,
+      { name: 'a.md', relPath: 'a.md', sessionTitle: 't' }
     ])
     expect(out).not.toContain('SECRET')
+    expect(out).not.toContain('正文')
     expect(out).toContain('a.md')
   })
 

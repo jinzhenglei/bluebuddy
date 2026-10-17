@@ -1,6 +1,14 @@
 import Database from 'better-sqlite3'
 import { randomUUID } from 'node:crypto'
-import type { ChatMessage, McpServerInfo, McpToolDoc, McpTransport, ToolCall } from '@shared/types'
+import type {
+  ChatMessage,
+  McpServerInfo,
+  McpToolDoc,
+  McpTransport,
+  ProjectAssetConfig,
+  ToolCall
+} from '@shared/types'
+import { compactAssetConfig, mergeAssetConfig, sanitizeAssetConfig } from '@shared/asset-config'
 import type { ArtifactDraft } from '../tools/types'
 
 /** 一次会话（Session）：一个工作目录 + 一个模型 + 一串消息；projectId 为空表示未归类 */
@@ -23,6 +31,8 @@ export interface Project {
   instructions?: string
   /** 空间默认模型；未设置读出为 undefined */
   providerId?: string
+  /** 资产识别配置；未设置或脏 JSON 读出为 undefined（= 全用默认） */
+  assetConfig?: ProjectAssetConfig
   createdAt: number
 }
 
@@ -48,16 +58,29 @@ function toSession(r: SessionRow): Session {
 }
 
 /** projects 表原始行 */
-type ProjectRow = Omit<Project, 'instructions' | 'providerId'> & {
+type ProjectRow = Omit<Project, 'instructions' | 'providerId' | 'assetConfig'> & {
   instructions: string | null
   providerId: string | null
+  assetConfig: string | null
 }
 
 function toProject(r: ProjectRow): Project {
   const p: Project = { id: r.id, name: r.name, workDir: r.workDir, createdAt: r.createdAt }
   if (r.instructions !== null) p.instructions = r.instructions
   if (r.providerId) p.providerId = r.providerId
+  const assetConfig = parseAssetConfig(r.assetConfig)
+  if (assetConfig) p.assetConfig = assetConfig
   return p
+}
+
+/** 安全解析 projects.asset_config（JSON 对象）；脏数据回退 undefined——坏配置不能拖垮整个空间列表 */
+function parseAssetConfig(raw: string | null): ProjectAssetConfig | undefined {
+  if (!raw) return undefined
+  try {
+    return sanitizeAssetConfig(JSON.parse(raw) as unknown)
+  } catch {
+    return undefined
+  }
 }
 
 /** 已入库的产物记录 */
@@ -78,7 +101,7 @@ export interface SkillRow {
   displayName?: string | null
 }
 
-const SCHEMA_VERSION = 9
+const SCHEMA_VERSION = 10
 
 /** 安全解析 mcp_servers.category（JSON 数组字符串）；脏数据/空值回退 undefined */
 function parseCategory(raw: string | null): string[] | undefined {
@@ -255,6 +278,12 @@ export class DbStore {
           REFERENCES projects(id) ON DELETE SET NULL;
         CREATE INDEX idx_sessions_project ON sessions(project_id, created_at);
       `)
+    }
+
+    if (current < 10) {
+      // v10：空间资产识别配置（扩展名白名单 / 忽略目录 / 资产页开关）。
+      // 单列 JSON 不拆三列：三者同属一份视图配置，日后加字段不再动表；NULL = 全用默认。
+      this.db.exec('ALTER TABLE projects ADD COLUMN asset_config TEXT')
     }
 
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`)
@@ -471,7 +500,7 @@ export class DbStore {
     const row = this.db
       .prepare(
         `SELECT id, name, work_dir AS workDir, instructions, provider_id AS providerId,
-                created_at AS createdAt
+                asset_config AS assetConfig, created_at AS createdAt
          FROM projects WHERE id = ?`
       )
       .get(id) as ProjectRow | undefined
@@ -483,7 +512,7 @@ export class DbStore {
     const rows = this.db
       .prepare(
         `SELECT id, name, work_dir AS workDir, instructions, provider_id AS providerId,
-                created_at AS createdAt
+                asset_config AS assetConfig, created_at AS createdAt
          FROM projects ORDER BY created_at DESC, rowid DESC`
       )
       .all() as ProjectRow[]
@@ -493,7 +522,13 @@ export class DbStore {
   /** patch 语义：只改传入的字段，未传字段保持原值 */
   updateProject(
     id: string,
-    patch: { name?: string; instructions?: string; providerId?: string; workDir?: string }
+    patch: {
+      name?: string
+      instructions?: string
+      providerId?: string
+      workDir?: string
+      assetConfig?: ProjectAssetConfig | null
+    }
   ): Project | undefined {
     const cols: string[] = []
     const vals: (string | null)[] = []
@@ -512,6 +547,13 @@ export class DbStore {
     if (patch.workDir !== undefined) {
       cols.push('work_dir = ?')
       vals.push(patch.workDir)
+    }
+    if (patch.assetConfig !== undefined) {
+      // 字段级合并：只传 filter 时不能把已存的扩展名清单顶掉；再瘦身，全默认落 NULL
+      const merged = mergeAssetConfig(this.getProject(id)?.assetConfig, patch.assetConfig)
+      const compact = compactAssetConfig(merged)
+      cols.push('asset_config = ?')
+      vals.push(compact ? JSON.stringify(compact) : null)
     }
     if (cols.length) {
       this.db.prepare(`UPDATE projects SET ${cols.join(', ')} WHERE id = ?`).run(...vals, id)
