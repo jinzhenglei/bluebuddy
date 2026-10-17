@@ -1,6 +1,6 @@
 {
   "name": "bluebuddy",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "本地优先的开源桌面智能体平台：自然语言下达任务，Agent 自主规划执行并交付成果",
   "license": "Apache-2.0",
   "main": "./out/main/index.js",

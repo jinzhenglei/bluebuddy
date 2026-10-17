@@ -16,7 +16,7 @@ import { useSkillsStore } from '@renderer/stores/skills'
 type View = 'home' | 'chat' | 'skills' | 'mcp' | 'settings' | 'projects' | 'project'
 
 /** 与 package.json version 同步维护 */
-const APP_VERSION = '0.1.0'
+const APP_VERSION = '0.2.0'
 
 /** 任务时间显示：当天显示 HH:mm，昨天显示「昨天」，更早显示 M-D */
 function fmtRelTime(ts: number): string {

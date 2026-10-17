@@ -75,7 +75,7 @@ export class McpManager {
 
   async connect(server: McpServerInfo): Promise<void> {
     await this.disconnect(server.id)
-    const client = new Client({ name: 'bluebuddy', version: '0.1.0' })
+    const client = new Client({ name: 'bluebuddy', version: '0.2.0' })
     try {
       if (server.transport === 'stdio') {
         const cfg = server.config as McpStdioConfig
