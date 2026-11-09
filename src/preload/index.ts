@@ -16,6 +16,7 @@ import type {
   McpServerInfo,
   McpServerStatus,
   McpTransport,
+  MessageFeedback,
   ProjectAssetsResult,
   ProjectCreateInput,
   ProjectInfo,
@@ -25,6 +26,7 @@ import type {
   SkillInfo,
   StreamEvent,
   TestResult,
+  TurnPrompt,
   UpdateEvent
 } from '@shared/types'
 
@@ -67,7 +69,13 @@ const api = {
   },
   messages: {
     list: (sessionId: string): Promise<ChatMessage[]> =>
-      ipcRenderer.invoke(IPC_CHANNELS.MessagesList, sessionId)
+      ipcRenderer.invoke(IPC_CHANNELS.MessagesList, sessionId),
+    /** 记录/清除对一条回答的反馈（点赞/点踩）；value 为 null 清除 */
+    setFeedback: (messageId: string, value: MessageFeedback | null): Promise<void> =>
+      ipcRenderer.invoke(IPC_CHANNELS.MessagesFeedbackSet, messageId, value),
+    /** 查某轮任务当时的系统提示词快照（按该轮 user 消息 id）；旧数据无快照返回 null */
+    getTurnPrompt: (userMessageId: string): Promise<TurnPrompt | null> =>
+      ipcRenderer.invoke(IPC_CHANNELS.TurnPromptGet, userMessageId)
   },
   artifacts: {
     list: (sessionId: string): Promise<ArtifactInfo[]> =>

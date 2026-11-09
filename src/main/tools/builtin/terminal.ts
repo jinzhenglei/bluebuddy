@@ -40,16 +40,22 @@ export function normalizeArgs(v: unknown): string[] {
  * 关键：command 与 args 分离（对齐 spawn 语义），避免任何字符串拼接带来的
  * shell 注入风险。模型若习惯给 "ls -la" 这种一整串，normalizeArgs 会兜底拆分。
  */
-export const runCommandTool: Tool<{ command: string; args?: string[] }> = {
+export const runCommandTool: Tool<{ command: string; args?: string[]; summary?: string }> = {
   name: 'run_command',
   description:
-    'Execute a program in the workspace directory. Provide the program name and its arguments as a list; do NOT include a shell wrapper. Example: command="git", args=["status","--short"].',
+    'Execute a program in the workspace directory. Provide the program name and its arguments as a list; do NOT include a shell wrapper. Example: command="git", args=["status","--short"]. Always include a one-sentence "summary" explaining what the command does (shown to the user).',
   parameters: z.object({
     command: z.string().min(1).describe('Program name or absolute path (e.g. "git", "node")'),
     args: z
       .preprocess(normalizeArgs, z.array(z.string()))
       .default([])
-      .describe('Argument vector passed verbatim to the program')
+      .describe('Argument vector passed verbatim to the program'),
+    summary: z
+      .string()
+      .optional()
+      .describe(
+        'One-sentence plain-language summary of what this command does (shown to the user), e.g. "list files in the workspace"'
+      )
   }),
   requiresApproval: true,
   approvalReason: (input) => {

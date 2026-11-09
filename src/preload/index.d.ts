@@ -14,6 +14,7 @@ import type {
   McpServerInfo,
   McpServerStatus,
   McpTransport,
+  MessageFeedback,
   ProjectAssetsResult,
   ProjectCreateInput,
   ProjectInfo,
@@ -23,6 +24,7 @@ import type {
   SkillInfo,
   StreamEvent,
   TestResult,
+  TurnPrompt,
   UpdateEvent
 } from '@shared/types'
 
@@ -53,6 +55,9 @@ interface SessionsApi {
 
 interface MessagesApi {
   list: (sessionId: string) => Promise<ChatMessage[]>
+  setFeedback: (messageId: string, value: MessageFeedback | null) => Promise<void>
+  /** 查某轮任务当时的系统提示词快照（按该轮 user 消息 id）；旧数据无快照返回 null */
+  getTurnPrompt: (userMessageId: string) => Promise<TurnPrompt | null>
 }
 
 interface ArtifactsApi {

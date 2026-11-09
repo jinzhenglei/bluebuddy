@@ -8,31 +8,15 @@ import { ResultPanel } from '@renderer/components/ResultPanel'
 import { ToolCallCard } from '@renderer/components/ToolCallCard'
 import { ApprovalPanel } from '@renderer/components/ApprovalPanel'
 import { TaskOpenMenu } from '@renderer/components/TaskOpenMenu'
+import { AnswerActions } from '@renderer/components/AnswerActions'
+import type { ProcessItem, TurnView } from '@renderer/components/turn-trajectory'
 import type { ChatMessage } from '@shared/types'
 import type { ToolCallState } from '@renderer/stores/agent'
 
 /**
- * 过程组里的一条：思考块 / 中间叙述 / 工具步骤行，按到达顺序排列。
- * 一轮任务的这些过程记录会被折叠进同一个「过程组」，最终答案留在组外。
+ * 过程组里的一条 / 一轮任务的展示视图：类型定义在 turn-trajectory.ts
+ * （react-refresh 要求组件文件不导出非组件，类型与 Trajectory 导出同放该模块）。
  */
-type ProcessItem =
-  | { kind: 'reasoning'; text: string }
-  | { kind: 'text'; text: string }
-  | { kind: 'tools'; calls: ToolCallState[] }
-
-interface TurnView {
-  key: number
-  /** 本轮的用户请求气泡文本 */
-  userText: string | null
-  /** 过程记录：思考 / 工具与技能调用 / 中间叙述，折叠展示 */
-  process: ProcessItem[]
-  /** 最终答案（过程组外展开渲染） */
-  answer: string | null
-  /** 是否正在流式执行（过程组默认展开 + 头部显示「执行中」） */
-  live: boolean
-  /** 历史 turn 的耗时秒数（首尾消息落库时间戳相减）；live turn 为 null */
-  durationSec: number | null
-}
 
 /** 耗时格式化：<60s 显示 Ns，否则 Nm Ns（对齐 WorkBuddy 的「已完成 28s」） */
 function fmtDuration(sec: number): string {
@@ -51,7 +35,8 @@ function buildTurns(messages: ChatMessage[]): TurnView[] {
   const results = new Map<string, { ok: boolean; content: string }>()
   for (const m of messages) {
     if (m.role === 'tool' && m.tool_call_id) {
-      results.set(m.tool_call_id, { ok: true, content: m.content })
+      // 成败标记落库后回读不失真；旧数据无标记按成功回退（失败信息本来就在 content 里）
+      results.set(m.tool_call_id, { ok: m.ok ?? true, content: m.content })
     }
   }
 
@@ -77,8 +62,11 @@ function buildTurns(messages: ChatMessage[]): TurnView[] {
       cur = {
         key: key++,
         userText: m.content,
+        userMsgId: m.id ?? null,
         process: [],
         answer: null,
+        answerId: null,
+        feedback: null,
         live: false,
         durationSec: null
       }
@@ -91,8 +79,11 @@ function buildTurns(messages: ChatMessage[]): TurnView[] {
       cur = {
         key: key++,
         userText: null,
+        userMsgId: null,
         process: [],
         answer: null,
+        answerId: null,
+        feedback: null,
         live: false,
         durationSec: null
       }
@@ -110,12 +101,17 @@ function buildTurns(messages: ChatMessage[]): TurnView[] {
       if (cur.answer) {
         cur.process.push({ kind: 'text', text: cur.answer })
         cur.answer = null
+        cur.answerId = null
+        cur.feedback = null
       }
       if (m.content) cur.process.push({ kind: 'text', text: m.content })
       cur.process.push({ kind: 'tools', calls })
     } else if (m.content) {
       if (cur.answer) cur.process.push({ kind: 'text', text: cur.answer })
       cur.answer = m.content
+      // 反馈按最终答案所在消息的落库 id 定位；答案降级时随旧答案一并清空
+      cur.answerId = m.id ?? null
+      cur.feedback = m.feedback ?? null
     }
   }
   finalize()
@@ -184,7 +180,17 @@ export function ChatPage(): React.JSX.Element {
     }
     return [
       ...base,
-      { key: -1, userText: null, process, answer: answer || null, live: true, durationSec: null }
+      {
+        key: -1,
+        userText: null,
+        userMsgId: null,
+        process,
+        answer: answer || null,
+        answerId: null,
+        feedback: null,
+        live: true,
+        durationSec: null
+      }
     ]
   }, [messages, busy, liveBlocks, pendingToolCalls])
 
@@ -274,6 +280,10 @@ export function ChatPage(): React.JSX.Element {
                   <div className={t.live ? 'md-stream' : undefined}>
                     <Markdown>{t.answer}</Markdown>
                   </div>
+                )}
+                {/* 回答操作条：点赞 / 点踩 / 导出 Trajectory（回答完成后出现） */}
+                {t.answer && !t.live && activeSessionId && (
+                  <AnswerActions turn={t} sessionId={activeSessionId} />
                 )}
               </div>
             ))}

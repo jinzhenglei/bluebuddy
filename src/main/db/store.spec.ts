@@ -86,6 +86,53 @@ describe('DbStore messages', () => {
     expect(got.createdAt).toBeGreaterThan(0)
   })
 
+  it('listMessages 带回消息行 id（反馈按 id 定位）', () => {
+    const s = store.createSession({ title: 'x', workDir: '/x', providerId: 'p' })
+    const { id } = store.appendMessage(s.id, { role: 'assistant', content: '答' })
+    expect(store.listMessages(s.id)[0].id).toBe(id)
+  })
+
+  it('setMessageFeedback 记录点赞/点踩可读回，null 清除', () => {
+    const s = store.createSession({ title: 'x', workDir: '/x', providerId: 'p' })
+    const { id } = store.appendMessage(s.id, { role: 'assistant', content: '答' })
+    expect(store.listMessages(s.id)[0].feedback).toBeUndefined()
+    store.setMessageFeedback(id, 'up')
+    expect(store.listMessages(s.id)[0].feedback).toBe('up')
+    store.setMessageFeedback(id, 'down')
+    expect(store.listMessages(s.id)[0].feedback).toBe('down')
+    store.setMessageFeedback(id, null)
+    expect(store.listMessages(s.id)[0].feedback).toBeUndefined()
+  })
+
+  it('tool 消息的 ok 成败标记往返；未写标记读回 undefined（旧数据不伪造）', () => {
+    const s = store.createSession({ title: 'x', workDir: '/x', providerId: 'p' })
+    store.appendMessage(s.id, { role: 'tool', tool_call_id: 'c1', content: 'out', ok: true })
+    store.appendMessage(s.id, { role: 'tool', tool_call_id: 'c2', content: 'err', ok: false })
+    store.appendMessage(s.id, { role: 'tool', tool_call_id: 'c3', content: 'legacy' })
+    const msgs = store.listMessages(s.id)
+    expect(msgs[0].ok).toBe(true)
+    expect(msgs[1].ok).toBe(false)
+    expect(msgs[2].ok).toBeUndefined()
+  })
+
+  it('saveTurnPrompt/getTurnPrompt 提示词快照往返：重复保存覆盖，缺失返回 undefined', () => {
+    const s = store.createSession({ title: 'x', workDir: '/x', providerId: 'p' })
+    const { id } = store.appendMessage(s.id, { role: 'user', content: 'hi' })
+    expect(store.getTurnPrompt(id)).toBeUndefined()
+    store.saveTurnPrompt(id, 'sys v1', 'gpt-x')
+    expect(store.getTurnPrompt(id)).toEqual({ prompt: 'sys v1', model: 'gpt-x' })
+    store.saveTurnPrompt(id, 'sys v2')
+    expect(store.getTurnPrompt(id)).toEqual({ prompt: 'sys v2' })
+  })
+
+  it('会话删除时 turn_prompts 快照随消息级联清除', () => {
+    const s = store.createSession({ title: 'x', workDir: '/x', providerId: 'p' })
+    const { id } = store.appendMessage(s.id, { role: 'user', content: 'hi' })
+    store.saveTurnPrompt(id, 'sys')
+    store.deleteSession(s.id)
+    expect(store.getTurnPrompt(id)).toBeUndefined()
+  })
+
   it('旧 v1 库文件打开时自动迁移到 v2（补 reasoning 列，不破坏既有数据）', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-migrate-'))
     const file = path.join(dir, 'db.sqlite')
@@ -349,7 +396,7 @@ describe('DbStore messages', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-migrate-v6-'))
     const file = path.join(dir, 'db.sqlite')
     // 手工建 v5 结构：mcp_servers 无 display_name/hub_id，无 settings_kv
-    // （带上 sessions：真实 v5 库必有它，后续 v9 迁移要往它加 project_id）
+    // （带上 sessions/messages：真实 v5 库必有它们，后续 v9/v11 迁移要往里加列）
     const raw = new Database(file)
     raw.exec(`
       CREATE TABLE sessions (
@@ -357,6 +404,17 @@ describe('DbStore messages', () => {
         title TEXT NOT NULL,
         work_dir TEXT NOT NULL,
         provider_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        name TEXT,
+        reasoning TEXT,
         created_at INTEGER NOT NULL
       );
       CREATE TABLE mcp_servers (
@@ -414,6 +472,7 @@ describe('DbStore messages', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-migrate-v7-'))
     const file = path.join(dir, 'db.sqlite')
     // 手工建 v6 结构：mcp_servers 有 display_name/hub_id，但无 description/category/source_url/stars/call_volume
+    // （带上 messages：真实旧库必有，v11 迁移要往它加 feedback 列）
     const raw = new Database(file)
     raw.exec(`
       CREATE TABLE sessions (
@@ -421,6 +480,17 @@ describe('DbStore messages', () => {
         title TEXT NOT NULL,
         work_dir TEXT NOT NULL,
         provider_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        name TEXT,
+        reasoning TEXT,
         created_at INTEGER NOT NULL
       );
       CREATE TABLE mcp_servers (
@@ -486,6 +556,7 @@ describe('DbStore messages', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-migrate-v8-'))
     const file = path.join(dir, 'db.sqlite')
     // 手工建 v7 结构：有市场元数据列，但无 readme/tools_doc/license/publisher/icon_url/updated_at/view_count
+    // （带上 messages：真实旧库必有，v11 迁移要往它加 feedback 列）
     const raw = new Database(file)
     raw.exec(`
       CREATE TABLE sessions (
@@ -493,6 +564,17 @@ describe('DbStore messages', () => {
         title TEXT NOT NULL,
         work_dir TEXT NOT NULL,
         provider_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        name TEXT,
+        reasoning TEXT,
         created_at INTEGER NOT NULL
       );
       CREATE TABLE mcp_servers (
@@ -565,6 +647,102 @@ describe('DbStore messages', () => {
         viewCount: 619820
       })
       expect(added.toolsDoc).toEqual(toolsDoc)
+    } finally {
+      upgraded.close()
+    }
+  })
+
+  it('旧 v10 库打开时自动迁移到 v11（messages 多出 feedback 列，旧消息与 id 完好）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-migrate-v11-'))
+    const file = path.join(dir, 'db.sqlite')
+    // 手工建一个 v10 结构的库（messages 无 feedback 列）并写入一条旧回答
+    const raw = new Database(file)
+    raw.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        work_dir TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        name TEXT,
+        reasoning TEXT,
+        created_at INTEGER NOT NULL
+      );
+    `)
+    raw.pragma('user_version = 10')
+    raw.prepare(`INSERT INTO sessions VALUES ('s1', 'old', '/x', 'p', 1)`).run()
+    raw
+      .prepare(
+        `INSERT INTO messages VALUES ('m1', 's1', 'assistant', 'old ans', NULL, NULL, NULL, NULL, 1)`
+      )
+      .run()
+    raw.close()
+
+    const upgraded = new DbStore(file)
+    try {
+      // 旧数据还在，新列可用
+      expect(upgraded.listMessages('s1')[0]).toMatchObject({ id: 'm1', content: 'old ans' })
+      expect(upgraded.listMessages('s1')[0].feedback).toBeUndefined()
+      upgraded.setMessageFeedback('m1', 'up')
+      expect(upgraded.listMessages('s1')[0].feedback).toBe('up')
+    } finally {
+      upgraded.close()
+    }
+  })
+
+  it('旧 v11 库打开时自动迁移到 v12（messages 多出 ok 列 + turn_prompts 表，旧数据完好）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bb-migrate-v12-'))
+    const file = path.join(dir, 'db.sqlite')
+    // 手工建一个 v11 结构的库（messages 无 ok 列、无 turn_prompts 表）并写入旧数据
+    const raw = new Database(file)
+    raw.exec(`
+      CREATE TABLE sessions (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        work_dir TEXT NOT NULL,
+        provider_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        name TEXT,
+        reasoning TEXT,
+        feedback TEXT,
+        created_at INTEGER NOT NULL
+      );
+    `)
+    raw.pragma('user_version = 11')
+    raw.prepare(`INSERT INTO sessions VALUES ('s1', 'old', '/x', 'p', 1)`).run()
+    raw
+      .prepare(
+        `INSERT INTO messages VALUES ('m1', 's1', 'tool', 'legacy out', NULL, 'c1', 'echo', NULL, NULL, 1)`
+      )
+      .run()
+    raw.close()
+
+    const upgraded = new DbStore(file)
+    try {
+      // 旧数据完好，旧的 tool 行无 ok 标记（不伪造成功）
+      expect(upgraded.listMessages('s1')[0]).toMatchObject({ id: 'm1', content: 'legacy out' })
+      expect(upgraded.listMessages('s1')[0].ok).toBeUndefined()
+      // 新列与新表可用
+      upgraded.appendMessage('s1', { role: 'tool', tool_call_id: 'c2', content: 'err', ok: false })
+      expect(upgraded.listMessages('s1')[1].ok).toBe(false)
+      upgraded.saveTurnPrompt('m1', 'sys snap', 'gpt-x')
+      expect(upgraded.getTurnPrompt('m1')).toEqual({ prompt: 'sys snap', model: 'gpt-x' })
     } finally {
       upgraded.close()
     }
@@ -852,6 +1030,17 @@ describe('DbStore projects（项目空间）', () => {
         url TEXT,
         created_at INTEGER NOT NULL
       );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        name TEXT,
+        reasoning TEXT,
+        created_at INTEGER NOT NULL
+      );
     `)
     raw.pragma('user_version = 8')
     raw.prepare(`INSERT INTO sessions VALUES ('s1', 'old', '/x', 'p', 1)`).run()
@@ -907,6 +1096,17 @@ describe('DbStore projects（项目空间）', () => {
         name TEXT NOT NULL,
         rel_path TEXT,
         url TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        tool_calls TEXT,
+        tool_call_id TEXT,
+        name TEXT,
+        reasoning TEXT,
         created_at INTEGER NOT NULL
       );
       CREATE INDEX idx_sessions_project ON sessions(project_id, created_at);

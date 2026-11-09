@@ -86,8 +86,8 @@ export async function* runAgentTurn(opts: RunAgentTurnOptions): AsyncGenerator<A
   }
   const newAgg = (): Agg => ({ text: '', reasoning: '', byIndex: new Map() })
 
-  // 基于当前 messages 现拼喂给 LLM 的副本：reasoning / createdAt 字段剥离
-  // （只供人回看与 UI 展示，进上下文既浪费 token 又会干扰模型）；
+  // 基于当前 messages 现拼喂给 LLM 的副本：reasoning / createdAt / id / feedback 字段剥离
+  // （只供人回看、UI 展示与落库定位，进上下文既浪费 token 又会干扰模型）；
   // 有 systemPrompt 且尚未含 system 时前置一条
   const toCallMessages = (): ChatMessage[] => {
     const stripped = messages.map(stripForLlm)
@@ -196,7 +196,8 @@ export async function* runAgentTurn(opts: RunAgentTurnOptions): AsyncGenerator<A
             role: 'tool',
             tool_call_id: call.id,
             content: reject,
-            name: call.function.name
+            name: call.function.name,
+            ok: false
           })
           yield { type: 'tool-result', callId: call.id, ok: false, content: reject }
           continue
@@ -208,7 +209,8 @@ export async function* runAgentTurn(opts: RunAgentTurnOptions): AsyncGenerator<A
         role: 'tool',
         tool_call_id: call.id,
         content: result.content,
-        name: call.function.name
+        name: call.function.name,
+        ok: result.ok
       })
       yield { type: 'tool-result', callId: call.id, ok: result.ok, content: result.content }
       if (result.artifact) {
@@ -262,11 +264,21 @@ function safeParseJson(s: string): unknown {
   }
 }
 
-/** 剥离 reasoning / createdAt 字段（不喂回 LLM）；两字段都缺的消息原样返回 */
+/** 剥离 reasoning / createdAt / id / feedback / ok 字段（不喂回 LLM）；都缺的消息原样返回 */
 function stripForLlm(m: ChatMessage): ChatMessage {
-  if (m.reasoning === undefined && m.createdAt === undefined) return m
+  if (
+    m.reasoning === undefined &&
+    m.createdAt === undefined &&
+    m.id === undefined &&
+    m.feedback === undefined &&
+    m.ok === undefined
+  )
+    return m
   const copy = { ...m }
   delete copy.reasoning
   delete copy.createdAt
+  delete copy.id
+  delete copy.feedback
+  delete copy.ok
   return copy
 }

@@ -2,9 +2,15 @@ import { useState } from 'react'
 import type { ToolCall } from '@shared/types'
 import type { ToolCallState } from '@renderer/stores/agent'
 import { useSkillsStore } from '@renderer/stores/skills'
-import { parseUseSkillName, skillDisplayName } from './tool-display'
+import {
+  parseUseSkillName,
+  runCommandDisplay,
+  skillDisplayName,
+  toolCallDisplay,
+  toolTitle
+} from './tool-display'
 
-/** 已知内置工具的中文标签；未知工具（未来 MCP/技能）回落原始 name */
+/** 已知内置工具的中文标签；未知工具（MCP 等）回落美化后的原始 name */
 const TOOL_LABELS: Record<string, string> = {
   read_file: '读取文件',
   write_file: '写入文件',
@@ -80,19 +86,24 @@ function IconChevron({ open }: { open: boolean }): React.JSX.Element {
 
 /**
  * 一次工具调用的展示步骤条（WorkBuddy 式）：
- * 状态图标（转圈/绿勾/红叉）+ 中文标签 + 原始 name，点击展开参数与结果。
+ * 状态图标（转圈/绿勾/红叉）+ 中文标签 + 调用摘要，点击展开参数与结果。
  */
 export function ToolCallCard({ state }: { state: ToolCallState }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const call: ToolCall = state.call
-  const label = TOOL_LABELS[call.function.name] ?? call.function.name
+  const label = TOOL_LABELS[call.function.name] ?? toolTitle(call.function.name)
   const status = !state.result ? 'running' : state.result.ok ? 'ok' : 'error'
-  // use_skill：把参数里的技能规范名映射成中文展示名（市场技能 displayName），
-  // 让用户一眼看到加载的是哪个技能；解析不出则回退显示原始工具名。
+  // 摘要行：说清这次调用是干嘛的——use_skill 显示技能展示名；run_command 用模型给的
+  // 摘要（回退命令行）；其余工具（含 MCP）从关键参数里提炼（如 `查询: 浙江 婚假 天数`）。
   const skills = useSkillsStore((s) => s.skills)
   const skillName =
     call.function.name === 'use_skill' ? parseUseSkillName(call.function.arguments) : null
   const skillLabel = skillName ? skillDisplayName(skills, skillName) : null
+  const detail =
+    skillLabel ??
+    (call.function.name === 'run_command'
+      ? runCommandDisplay(call.function.arguments)
+      : toolCallDisplay(call.function.arguments))
 
   return (
     <div className="rounded-xl bg-canvas/80 text-sm">
@@ -102,8 +113,10 @@ export function ToolCallCard({ state }: { state: ToolCallState }): React.JSX.Ele
       >
         {status === 'running' ? <IconSpinner /> : status === 'ok' ? <IconOk /> : <IconErr />}
         <span className="font-medium text-ink">{label}</span>
-        {skillLabel ? (
-          <span className="min-w-0 truncate text-ink-2">{skillLabel}</span>
+        {detail ? (
+          <span className="min-w-0 truncate text-ink-2" title={detail}>
+            {detail}
+          </span>
         ) : (
           <span className="font-mono text-xs text-ink-3">{call.function.name}</span>
         )}

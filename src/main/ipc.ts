@@ -13,6 +13,7 @@ import type {
   IdeAppView,
   McpServerInfo,
   McpTransport,
+  MessageFeedback,
   ProjectAssetsResult,
   ProjectCreateInput,
   ProjectPatch,
@@ -209,6 +210,17 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     db.deleteSession(id)
   })
   ipcMain.handle(IPC_CHANNELS.MessagesList, (_e, sessionId: string) => db.listMessages(sessionId))
+  ipcMain.handle(
+    IPC_CHANNELS.MessagesFeedbackSet,
+    (_e, messageId: string, value: MessageFeedback | null) => {
+      // 反馈只认 up/down 两态（null = 清除），其余一律按清除处理，不信任渲染层
+      db.setMessageFeedback(messageId, value === 'up' || value === 'down' ? value : null)
+    }
+  )
+  ipcMain.handle(
+    IPC_CHANNELS.TurnPromptGet,
+    (_e, userMessageId: string) => db.getTurnPrompt(userMessageId) ?? null
+  )
   ipcMain.handle(IPC_CHANNELS.ArtifactsList, (_e, sessionId: string) => {
     const session = db.getSession(sessionId)
     return db.listArtifacts(sessionId).map((a) => {
@@ -650,7 +662,10 @@ export function registerIpcHandlers(deps: IpcDeps): void {
     const messages: ChatMessage[] = db.listMessages(sessionId)
     const userMsg: ChatMessage = { role: 'user', content: userText }
     messages.push(userMsg)
-    db.appendMessage(sessionId, userMsg)
+    const { id: userMsgId } = db.appendMessage(sessionId, userMsg)
+    // 任务当时的系统提示词快照：以本轮 user 消息 id 为锚，供轨迹导出/评测复现。
+    // 只作历史记录，喂给 LLM 的始终是上面最新装配的 systemPrompt
+    db.saveTurnPrompt(userMsgId, systemPrompt, provider.model)
     let dbCount = messages.length
 
     const sendTo = (e: AgentStreamEvent): void => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { promises as fs } from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
-import { LocalWorkspace } from './local'
+import { LocalWorkspace, decodeOutput } from './local'
 import { PathTraversalError } from './provider'
 
 /**
@@ -170,6 +170,38 @@ describe('LocalWorkspace.exec', () => {
     const r = await ws.exec(process.execPath, ['-e', script])
     expect(r.exitCode).toBe(0)
     expect(r.stdout).toContain('eof:')
+  })
+
+  it('给子进程强制 UTF-8 环境：Python 等不再撞 Windows GBK', async () => {
+    const script =
+      'process.stdout.write(JSON.stringify([process.env.PYTHONUTF8, process.env.PYTHONIOENCODING]))'
+    const r = await ws.exec(process.execPath, ['-e', script])
+    expect(r.exitCode).toBe(0)
+    expect(JSON.parse(r.stdout)).toEqual(['1', 'utf-8'])
+  })
+
+  it('多字节字符被切在两个 chunk 也不乱码（先攒 Buffer 再整体解码）', async () => {
+    // '中' 的 UTF-8 字节 E4 B8 AD，故意拆成两次写入制造 chunk 边界
+    const script =
+      'process.stdout.write(Buffer.from([0xe4,0xb8]));setTimeout(()=>process.stdout.write(Buffer.from([0xad])),50)'
+    const r = await ws.exec(process.execPath, ['-e', script])
+    expect(r.stdout).toBe('中')
+  })
+})
+
+describe('decodeOutput 子进程输出解码', () => {
+  it('UTF-8 中文/emoji 原样解码，空 buffer 返回空串', () => {
+    expect(decodeOutput(Buffer.from('中文✅', 'utf-8'))).toBe('中文✅')
+    expect(decodeOutput(Buffer.alloc(0))).toBe('')
+  })
+
+  it('GBK 字节序列退回 GBK 解码（Windows 旧程序输出不乱码）', () => {
+    // '中文' 的 GBK 编码：D6 D0 CE C4（不是合法 UTF-8）
+    expect(decodeOutput(Buffer.from([0xd6, 0xd0, 0xce, 0xc4]))).toBe('中文')
+  })
+
+  it('ASCII 输出两种编码下一致，原样返回', () => {
+    expect(decodeOutput(Buffer.from('exit: 0', 'utf-8'))).toBe('exit: 0')
   })
 })
 

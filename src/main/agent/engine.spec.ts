@@ -549,6 +549,84 @@ describe('reasoning-delta 转发', () => {
       { role: 'assistant', content: 'prev' }
     ])
   })
+
+  it('喂回 LLM 时剥离 id / feedback 字段（落库元数据不污染上下文）', async () => {
+    const registry = new ToolRegistry()
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'hi' },
+      { id: 'm2', role: 'assistant', content: 'prev', feedback: 'up' }
+    ]
+    const log: ChatMessage[][] = []
+    const llm = recordingLlm([[{ type: 'delta', text: 'ok' }, { type: 'done' }]], log)
+    await collect(runAgentTurn({ llmCall: llm, registry, toolCtx, messages }))
+    expect(log[0]).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'prev' }
+    ])
+  })
+})
+
+describe('工具结果 ok 成败标记', () => {
+  it('执行成功 ok=true；参数校验失败 / 未知工具 ok=false，都如实回填到 tool 行', async () => {
+    const registry = new ToolRegistry()
+    registry.register(echoTool())
+    const messages: ChatMessage[] = [{ role: 'user', content: 'go' }]
+    const llm = scriptedLlm([
+      [
+        tc('c1', 'echo', '{"msg":"hi"}', 0),
+        tc('c2', 'echo', '{"msg":123}', 1),
+        tc('c3', 'ghost', '{}', 2),
+        { type: 'done' }
+      ],
+      [{ type: 'delta', text: 'ok' }, { type: 'done' }]
+    ])
+    await collect(runAgentTurn({ llmCall: llm, registry, toolCtx, messages }))
+    const tools = messages.filter((m) => m.role === 'tool')
+    expect(tools.map((m) => [m.tool_call_id, m.ok])).toEqual([
+      ['c1', true],
+      ['c2', false],
+      ['c3', false]
+    ])
+  })
+
+  it('用户拒绝的 tool 行 ok=false（回读不再伪造成功）', async () => {
+    const registry = new ToolRegistry()
+    registry.register(dangerTool())
+    const messages: ChatMessage[] = [{ role: 'user', content: 'go' }]
+    const llm = scriptedLlm([
+      [tc('c1', 'danger', '{"x":1}'), { type: 'done' }],
+      [{ type: 'delta', text: 'ok I will not' }, { type: 'done' }]
+    ])
+    await collect(
+      runAgentTurn({
+        llmCall: llm,
+        registry,
+        toolCtx,
+        messages,
+        requestApproval: async () => false
+      })
+    )
+    const toolMsg = messages.find((m) => m.role === 'tool')!
+    expect(toolMsg.ok).toBe(false)
+  })
+
+  it('喂回 LLM 时剥离 ok 字段（落库元数据不污染上下文）', async () => {
+    const registry = new ToolRegistry()
+    registry.register(echoTool())
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'hi' },
+      { role: 'tool', tool_call_id: 'c0', name: 'echo', content: 'out', ok: true },
+      { role: 'tool', tool_call_id: 'c-1', name: 'ghost', content: 'err', ok: false }
+    ]
+    const log: ChatMessage[][] = []
+    const llm = recordingLlm([[{ type: 'delta', text: 'ok' }, { type: 'done' }]], log)
+    await collect(runAgentTurn({ llmCall: llm, registry, toolCtx, messages }))
+    expect(log[0]).toEqual([
+      { role: 'user', content: 'hi' },
+      { role: 'tool', tool_call_id: 'c0', name: 'echo', content: 'out' },
+      { role: 'tool', tool_call_id: 'c-1', name: 'ghost', content: 'err' }
+    ])
+  })
 })
 
 // 类型导出避免未使用告警

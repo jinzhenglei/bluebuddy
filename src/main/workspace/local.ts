@@ -1,5 +1,6 @@
 import { promises as fs } from 'node:fs'
 import { spawn } from 'node:child_process'
+import { TextDecoder } from 'node:util'
 import * as path from 'node:path'
 import {
   DirEntry,
@@ -14,6 +15,25 @@ function isInside(abs: string, base: string): boolean {
   if (abs === base) return true
   const withSep = base.endsWith(path.sep) ? base : base + path.sep
   return abs.startsWith(withSep)
+}
+
+/**
+ * 子进程输出解码：先严格按 UTF-8 解码，遇非法字节序列（多为 Windows 旧程序按
+ * GBK/cp936 输出中文）退回 GBK，避免把乱码喂给模型/界面。先攒 Buffer 再整体解码，
+ * 多字节字符被切在两个 chunk 之间也不会解碎。
+ */
+export function decodeOutput(buf: Buffer): string {
+  if (!buf.length) return ''
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(buf)
+  } catch {
+    try {
+      return new TextDecoder('gbk').decode(buf)
+    } catch {
+      /* 极端情况（小 ICU 不带 GBK）退化到宽松 UTF-8，至少不抛 */
+      return buf.toString('utf-8')
+    }
+  }
 }
 
 /**
@@ -90,9 +110,17 @@ export class LocalWorkspace implements WorkspaceProvider {
   async exec(command: string, args: string[], opts: ExecOptions = {}): Promise<ExecResult> {
     const { timeoutMs = 60_000, signal } = opts
     return new Promise((resolvePromise) => {
-      const child = spawn(command, args, { cwd: this.root, shell: false })
-      let stdout = ''
-      let stderr = ''
+      const child = spawn(command, args, {
+        cwd: this.root,
+        shell: false,
+        // Windows 控制台默认 GBK：Python 等按系统 locale 决定 stdio 编码，打印中文/emoji
+        // 会 UnicodeEncodeError 或输出 GBK 字节。统一注入 UTF-8 环境变量，从根上消灭编码问题。
+        env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' }
+      })
+      const stdoutBufs: Buffer[] = []
+      const stderrBufs: Buffer[] = []
+      // kill/error 时的降级说明（如超时/取消）：仅在子进程没吐任何 stderr 时顶上
+      let stderrNote = ''
       let settled = false
       const cleanups: Array<() => void> = []
 
@@ -100,12 +128,17 @@ export class LocalWorkspace implements WorkspaceProvider {
         if (settled) return
         settled = true
         for (const c of cleanups) c()
-        resolvePromise({ stdout, stderr, exitCode: code })
+        const errText = decodeOutput(Buffer.concat(stderrBufs))
+        resolvePromise({
+          stdout: decodeOutput(Buffer.concat(stdoutBufs)),
+          stderr: errText || stderrNote,
+          exitCode: code
+        })
       }
       // 强杀：先标记 stderr 原因，再 SIGKILL，并 finish(-1)
       const kill = (reason: string): void => {
         if (settled) return
-        if (!stderr) stderr = reason
+        if (!stderrBufs.length) stderrNote = reason
         try {
           child.kill('SIGKILL')
         } catch {
@@ -120,8 +153,8 @@ export class LocalWorkspace implements WorkspaceProvider {
       } catch {
         /* 某些平台 stdin 可能为 null，忽略 */
       }
-      child.stdout?.on('data', (chunk) => (stdout += chunk.toString()))
-      child.stderr?.on('data', (chunk) => (stderr += chunk.toString()))
+      child.stdout?.on('data', (chunk: Buffer) => stdoutBufs.push(chunk))
+      child.stderr?.on('data', (chunk: Buffer) => stderrBufs.push(chunk))
 
       if (timeoutMs > 0) {
         const timer = setTimeout(() => kill(`command timed out after ${timeoutMs}ms`), timeoutMs)
@@ -136,7 +169,7 @@ export class LocalWorkspace implements WorkspaceProvider {
 
       child.on('close', (code) => finish(code ?? -1))
       child.on('error', (err) => {
-        if (!stderr) stderr = err.message
+        if (!stderrBufs.length) stderrNote = err.message
         finish(-1)
       })
     })

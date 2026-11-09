@@ -5,8 +5,10 @@ import type {
   McpServerInfo,
   McpToolDoc,
   McpTransport,
+  MessageFeedback,
   ProjectAssetConfig,
-  ToolCall
+  ToolCall,
+  TurnPrompt
 } from '@shared/types'
 import { compactAssetConfig, mergeAssetConfig, sanitizeAssetConfig } from '@shared/asset-config'
 import type { ArtifactDraft } from '../tools/types'
@@ -101,7 +103,7 @@ export interface SkillRow {
   displayName?: string | null
 }
 
-const SCHEMA_VERSION = 10
+const SCHEMA_VERSION = 12
 
 /** 安全解析 mcp_servers.category（JSON 数组字符串）；脏数据/空值回退 undefined */
 function parseCategory(raw: string | null): string[] | undefined {
@@ -286,6 +288,26 @@ export class DbStore {
       this.db.exec('ALTER TABLE projects ADD COLUMN asset_config TEXT')
     }
 
+    if (current < 11) {
+      // v11：回答反馈（点赞/点踩）随消息落库，按消息行 id 定位；NULL = 未反馈
+      this.db.exec('ALTER TABLE messages ADD COLUMN feedback TEXT')
+    }
+
+    if (current < 12) {
+      // v12：工具结果成败标记随消息落库（回读不再失真）；NULL = 旧数据无标记。
+      // turn_prompts 任务快照：以本轮 user 消息 id 为锚，存任务当时的系统提示词与模型，
+      // 供轨迹导出/评测复现；FK 级联，消息删快照随之删。
+      this.db.exec(`
+        ALTER TABLE messages ADD COLUMN ok INTEGER;
+        CREATE TABLE turn_prompts (
+          user_message_id TEXT PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
+          prompt TEXT NOT NULL,
+          model TEXT,
+          created_at INTEGER NOT NULL
+        );
+      `)
+    }
+
     this.db.pragma(`user_version = ${SCHEMA_VERSION}`)
   }
 
@@ -373,8 +395,8 @@ export class DbStore {
     const toolCallsJson = msg.tool_calls ? JSON.stringify(msg.tool_calls) : null
     this.db
       .prepare(
-        `INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, name, reasoning, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO messages (id, session_id, role, content, tool_calls, tool_call_id, name, reasoning, ok, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -385,6 +407,7 @@ export class DbStore {
         msg.tool_call_id ?? null,
         msg.name ?? null,
         msg.reasoning ?? null,
+        msg.ok === undefined ? null : msg.ok ? 1 : 0,
         createdAt
       )
     return { id, createdAt }
@@ -393,27 +416,61 @@ export class DbStore {
   listMessages(sessionId: string): ChatMessage[] {
     const rows = this.db
       .prepare(
-        `SELECT role, content, tool_calls, tool_call_id, name, reasoning, created_at
+        `SELECT id, role, content, tool_calls, tool_call_id, name, reasoning, feedback, ok, created_at
          FROM messages WHERE session_id = ? ORDER BY created_at ASC, rowid ASC`
       )
       .all(sessionId) as Array<{
+      id: string
       role: ChatMessage['role']
       content: string
       tool_calls: string | null
       tool_call_id: string | null
       name: string | null
       reasoning: string | null
+      feedback: string | null
+      ok: number | null
       created_at: number
     }>
     return rows.map((r) => {
-      const m: ChatMessage = { role: r.role, content: r.content }
+      const m: ChatMessage = { role: r.role, content: r.content, id: r.id }
       if (r.tool_calls) m.tool_calls = JSON.parse(r.tool_calls) as ToolCall[]
       if (r.tool_call_id) m.tool_call_id = r.tool_call_id
       if (r.name) m.name = r.name
       if (r.reasoning) m.reasoning = r.reasoning
+      if (r.feedback === 'up' || r.feedback === 'down') m.feedback = r.feedback
+      if (r.ok === 0 || r.ok === 1) m.ok = r.ok === 1
       m.createdAt = r.created_at
       return m
     })
+  }
+
+  /** 记录/清除对一条回答的反馈（点赞/点踩）；value 为 null 清除 */
+  setMessageFeedback(messageId: string, value: MessageFeedback | null): void {
+    this.db.prepare(`UPDATE messages SET feedback = ? WHERE id = ?`).run(value, messageId)
+  }
+
+  // ---------- turn_prompts（任务快照） ----------
+
+  /**
+   * 落任务当时的系统提示词快照（以本轮 user 消息 id 为锚）。
+   * 只作历史记录/轨迹导出；喂给 LLM 的始终是最新装配的提示词，不读这张表。
+   */
+  saveTurnPrompt(userMessageId: string, prompt: string, model?: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO turn_prompts (user_message_id, prompt, model, created_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_message_id) DO UPDATE SET prompt = excluded.prompt, model = excluded.model`
+      )
+      .run(userMessageId, prompt, model ?? null, Date.now())
+  }
+
+  /** 查某轮任务当时的系统提示词快照；旧数据无快照返回 undefined */
+  getTurnPrompt(userMessageId: string): TurnPrompt | undefined {
+    const row = this.db
+      .prepare(`SELECT prompt, model FROM turn_prompts WHERE user_message_id = ?`)
+      .get(userMessageId) as { prompt: string; model: string | null } | undefined
+    if (!row) return undefined
+    return row.model ? { prompt: row.prompt, model: row.model } : { prompt: row.prompt }
   }
 
   // ---------- artifacts ----------
@@ -819,6 +876,7 @@ export class DbStore {
    */
   wipeAll(): void {
     this.db.exec(`
+      DELETE FROM turn_prompts;
       DELETE FROM messages;
       DELETE FROM artifacts;
       DELETE FROM sessions;

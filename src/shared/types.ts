@@ -35,6 +35,8 @@ export interface ToolCall {
 
 /** 一条聊天消息，与 OpenAI messages 数组字段对齐 */
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
+/** 对一条回答的用户反馈：点赞/点踩 */
+export type MessageFeedback = 'up' | 'down'
 export interface ChatMessage {
   role: ChatRole
   /** tool 角色消息此字段填工具执行结果的字符串表示 */
@@ -49,6 +51,20 @@ export interface ChatMessage {
   tool_call_id?: string
   /** tool 角色消息可选：工具名，便于 UI 与调试 */
   name?: string
+  /** 落库行 id（DB 读出时带上）；UI 按消息定位反馈等，喂回 LLM 时剥离 */
+  id?: string
+  /** 对回答的反馈（点赞/点踩）；落库可回看，喂回 LLM 时剥离 */
+  feedback?: MessageFeedback
+  /** 工具结果成败标记（role='tool' 行专用）；旧数据无标记为 undefined，喂回 LLM 时剥离 */
+  ok?: boolean
+}
+
+/** 任务当时的系统提示词快照（turn_prompts 表，以本轮 user 消息 id 为锚） */
+export interface TurnPrompt {
+  /** 系统提示词全文（任务运行时的装配结果） */
+  prompt: string
+  /** 当时的模型名；旧数据可缺 */
+  model?: string
 }
 
 /** 连通性测试结果 */

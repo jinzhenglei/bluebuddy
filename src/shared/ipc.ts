@@ -16,6 +16,8 @@ export const IPC_CHANNELS = {
   SessionsRename: 'sessions:rename',
   SessionsDelete: 'sessions:delete',
   MessagesList: 'messages:list',
+  MessagesFeedbackSet: 'messages:feedback-set',
+  TurnPromptGet: 'turn-prompt:get',
   ArtifactsList: 'artifacts:list',
   ArtifactsDelete: 'artifacts:delete',
 

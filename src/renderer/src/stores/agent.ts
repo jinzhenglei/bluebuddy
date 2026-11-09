@@ -1,5 +1,11 @@
 import { create } from 'zustand'
-import type { AgentStreamEvent, ArtifactInfo, ChatMessage, SessionInfo } from '@shared/types'
+import type {
+  AgentStreamEvent,
+  ArtifactInfo,
+  ChatMessage,
+  MessageFeedback,
+  SessionInfo
+} from '@shared/types'
 import { emptyTurn, reduceTurn, type TurnState } from './turn-reducer'
 
 // 复用 turn-reducer 里的类型，保持既有消费方（Chat / ApprovalPanel / ToolCallCard）的导入路径不变
@@ -29,6 +35,8 @@ interface AgentState {
   replyPermission(requestId: string, approved: boolean, always: boolean): Promise<void>
   handleEvent(e: AgentStreamEvent): void
   loadArtifacts(): Promise<void>
+  /** 记录/清除对一条回答的反馈（点赞/点踩）：乐观更新本地展示，异步落库 */
+  setFeedback(messageId: string, value: MessageFeedback | null): void
   clearError(): void
 }
 
@@ -208,6 +216,30 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   loadArtifacts: async () => {
     const id = get().activeSessionId
     set({ artifacts: id ? await window.api.artifacts.list(id) : [] })
+  },
+
+  setFeedback: (messageId, value) => {
+    // 乐观更新本地展示（含运行中会话的基座快照，避免切走切回闪回旧值）；
+    // 落库异步：反馈非关键路径，失败丢一次点击即可，不弹错打扰
+    const patch = (list: ChatMessage[]): ChatMessage[] =>
+      list.some((m) => m.id === messageId)
+        ? list.map((m) => {
+            if (m.id !== messageId) return m
+            const next: ChatMessage = { ...m }
+            delete next.feedback
+            if (value) next.feedback = value
+            return next
+          })
+        : list
+    set((s) => {
+      const sessionTurns = { ...s.sessionTurns }
+      const t = s.activeSessionId ? sessionTurns[s.activeSessionId] : undefined
+      if (s.activeSessionId && t) {
+        sessionTurns[s.activeSessionId] = { ...t, baseMessages: patch(t.baseMessages) }
+      }
+      return { messages: patch(s.messages), sessionTurns }
+    })
+    void window.api.messages.setFeedback(messageId, value)
   },
 
   clearError: () => {
