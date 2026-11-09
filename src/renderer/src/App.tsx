@@ -16,7 +16,7 @@ import type { UpdateEvent } from '@shared/types'
 type View = 'home' | 'chat' | 'skills' | 'mcp' | 'settings' | 'projects' | 'project'
 
 /** 与 package.json version 同步维护 */
-const APP_VERSION = '0.3.0'
+const APP_VERSION = '0.4.0'
 
 /** 任务时间显示：当天显示 HH:mm，昨天显示「昨天」，更早显示 M-D */
 function fmtRelTime(ts: number): string {
