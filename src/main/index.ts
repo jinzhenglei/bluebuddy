@@ -14,6 +14,7 @@ import { McpManager } from './mcp/manager'
 import { MsHubClient } from './mcp/hub'
 import { HubTokenStore } from './mcp/token'
 import { registerIpcHandlers } from './ipc'
+import { startAutoUpdate } from './updater'
 
 function createWindow(): void {
   // Create the browser window.
@@ -139,6 +140,10 @@ app.whenReady().then(async () => {
   })
 
   createWindow()
+
+  // 自动检测更新（阶段 7）：启动后延迟首查并周期复查，发现新版自动下载，
+  // 下载完成后左下角菜单提示「安装更新」（dev 下内部直接跳过）
+  startAutoUpdate()
 
   app.on('before-quit', () => {
     void mcp.shutdown()

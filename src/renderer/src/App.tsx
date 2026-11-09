@@ -7,11 +7,11 @@ import { SkillsPage } from '@renderer/pages/Skills'
 import { McpPage } from '@renderer/pages/Mcp'
 import { SettingsPage } from '@renderer/pages/Settings'
 import { Onboarding } from '@renderer/components/Onboarding'
-import { UpdateDialog } from '@renderer/components/UpdateDialog'
 import { TaskOpenMenu } from '@renderer/components/TaskOpenMenu'
 import { useAgentStore } from '@renderer/stores/agent'
 import { useSettingsStore } from '@renderer/stores/settings'
 import { useSkillsStore } from '@renderer/stores/skills'
+import type { UpdateEvent } from '@shared/types'
 
 type View = 'home' | 'chat' | 'skills' | 'mcp' | 'settings' | 'projects' | 'project'
 
@@ -183,17 +183,33 @@ function menuRowClass(): string {
   return 'flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-ink-2 transition hover:bg-black/5 hover:text-ink'
 }
 
+/** 左下角菜单「检查更新」行文案：随自动更新状态变化，下载完成后提示安装 */
+function updateMenuLabel(ev: UpdateEvent | null): string {
+  switch (ev?.phase) {
+    case 'available':
+      return '发现新版本'
+    case 'progress':
+      return '正在下载更新'
+    case 'downloaded':
+      return '安装更新'
+    default:
+      return '检查更新'
+  }
+}
+
 function App(): React.JSX.Element {
   // 默认落在新建任务页（WorkBuddy 首屏）；点侧边栏任务才进对话视图
   const [view, setView] = useState<View>('home')
   const [query, setQuery] = useState('')
   // 当前打开详情的项目空间（null 表示只在列表页）
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null)
-  // 左下角用户菜单与关于/更新弹窗
+  // 左下角用户菜单与关于弹窗
   const [userMenu, setUserMenu] = useState(false)
-  const [dialog, setDialog] = useState<'' | 'about' | 'update'>('')
+  const [dialog, setDialog] = useState<'' | 'about'>('')
   // 首次启动向导：prefs.onboarded=false 时弹出（挂载时读一次）
   const [showOnboard, setShowOnboard] = useState(false)
+  // 自动更新状态（主进程自动检测/自动下载后广播）：驱动左下角菜单的安装提示
+  const [updateEv, setUpdateEv] = useState<UpdateEvent | null>(null)
 
   const sessions = useAgentStore((s) => s.sessions)
   const activeSessionId = useAgentStore((s) => s.activeSessionId)
@@ -208,6 +224,19 @@ function App(): React.JSX.Element {
   // 返回的 cleanup 在卸载时取消订阅，避免监听器累积导致同一事件被处理多次。
   useEffect(() => {
     const unsubscribe = window.api.agent.onEvent((e) => useAgentStore.getState().handleEvent(e))
+    return unsubscribe
+  }, [])
+
+  // 订阅自动更新事件流；挂载时先取一次快照，避免错过启动阶段自动检查的结果
+  useEffect(() => {
+    let gotEvent = false
+    const unsubscribe = window.api.updater.onEvent((e) => {
+      gotEvent = true
+      setUpdateEv(e)
+    })
+    void window.api.updater.status().then((s) => {
+      if (s && !gotEvent) setUpdateEv(s)
+    })
     return unsubscribe
   }, [])
 
@@ -375,13 +404,53 @@ function App(): React.JSX.Element {
                 <button
                   className={menuRowClass()}
                   onClick={() => {
-                    setUserMenu(false)
-                    setDialog('update')
+                    // 就地反馈：留在菜单内触发检测，状态直接更新在本行，不弹窗
+                    // 新包已下载就绪：点击直接重启安装
+                    if (updateEv?.phase === 'downloaded') {
+                      void window.api.updater.install()
+                      return
+                    }
+                    // 空闲/失败/已是最新：触发一次检测（下载在途或检查中不重复触发）
+                    const phase = updateEv?.phase
+                    if (!phase || phase === 'not-available' || phase === 'error') {
+                      void window.api.updater.check()
+                    }
                   }}
                 >
-                  <IconUpdate /> 检查更新
-                  <span className="ml-auto text-xs text-ink-3">v{APP_VERSION}</span>
+                  <IconUpdate /> {updateMenuLabel(updateEv)}
+                  {updateEv?.phase === 'downloaded' ? (
+                    <span className="ml-auto flex items-center gap-1.5 text-xs font-medium text-brand">
+                      v{updateEv.version}
+                      <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                    </span>
+                  ) : updateEv?.phase === 'available' ? (
+                    <span className="ml-auto flex items-center gap-1.5 text-xs text-ink-3">
+                      v{updateEv.version}
+                      <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                    </span>
+                  ) : updateEv?.phase === 'progress' ? (
+                    <span className="ml-auto text-xs text-ink-3">
+                      {Math.round(updateEv.percent)}%
+                    </span>
+                  ) : updateEv?.phase === 'checking' ? (
+                    <span className="ml-auto text-xs text-ink-3">检查中…</span>
+                  ) : updateEv?.phase === 'not-available' ? (
+                    <span className="ml-auto text-xs text-ink-3">已是最新</span>
+                  ) : updateEv?.phase === 'error' ? (
+                    <span className="ml-auto text-xs text-red-500">检查失败</span>
+                  ) : (
+                    <span className="ml-auto text-xs text-ink-3">v{APP_VERSION}</span>
+                  )}
                 </button>
+                {/* 就地反馈：失败原因/就绪提示不弹窗，直接在菜单里给一行提示 */}
+                {updateEv?.phase === 'error' && (
+                  <div className="px-3 pb-1 pl-10 text-xs text-red-500" title={updateEv.message}>
+                    <span className="block truncate">{updateEv.message}</span>
+                  </div>
+                )}
+                {updateEv?.phase === 'downloaded' && (
+                  <div className="px-3 pb-1 pl-10 text-xs text-ink-3">已下载完成，点击安装</div>
+                )}
               </div>
             </>
           )}
@@ -457,9 +526,6 @@ function App(): React.JSX.Element {
           </div>
         </div>
       )}
-
-      {/* 检查更新：阶段 7 接 electron-updater（仅打包安装态生效） */}
-      {dialog === 'update' && <UpdateDialog version={APP_VERSION} onClose={() => setDialog('')} />}
 
       {/* 首次启动向导：覆盖整窗，完成/跳过后写入 onboarded 不再弹出 */}
       {showOnboard && <Onboarding onDone={() => setShowOnboard(false)} />}

@@ -69,10 +69,11 @@ export const IPC_CHANNELS = {
   AppInfo: 'app:info',
   DataWipe: 'app:data-wipe',
 
-  // 自动更新（阶段 7）：检查/下载/重启安装 三个 invoke + 一个事件流 send
+  // 自动更新（阶段 7）：检查/下载/重启安装 三个 invoke + 状态快照查询 + 一个事件流 send
   UpdateCheck: 'update:check',
   UpdateDownload: 'update:download',
   UpdateInstall: 'update:install',
+  UpdateStatus: 'update:status',
   UpdateEvent: 'update:event',
 
   // 外部应用（IDE）集成：列表/添加手动/删除或停用/用指定应用打开文件夹

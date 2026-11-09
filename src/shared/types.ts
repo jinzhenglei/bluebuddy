@@ -415,8 +415,8 @@ export interface AppInfo {
 
 /**
  * 自动更新事件流（阶段 7）：主进程 autoUpdater 的回调翻译成一组带 phase 的事件，
- * 推给发起检查的那个渲染进程；UI 据此展示 检查中/发现新版/下载进度/已就绪/失败。
- * 采用 autoDownload=false：发现新版后不自动下载，由用户确认再触发 download。
+ * 广播给所有窗口；UI 据此展示 检查中/发现新版/自动下载进度/已就绪/失败。
+ * 采用 autoDownload=true：启动后自动检测并自动下载，下载完成后菜单提示用户点击安装。
  */
 export type UpdateEvent =
   | { phase: 'checking' }

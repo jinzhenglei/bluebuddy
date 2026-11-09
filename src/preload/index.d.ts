@@ -167,6 +167,7 @@ interface UpdaterApi {
   check: () => Promise<void>
   download: () => Promise<void>
   install: () => Promise<void>
+  status: () => Promise<UpdateEvent | null>
   onEvent: (cb: (event: UpdateEvent) => void) => () => void
 }
 

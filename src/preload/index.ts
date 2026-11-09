@@ -206,12 +206,14 @@ const api = {
       ipcRenderer.invoke(IPC_CHANNELS.PermissionReply, requestId, approved, alwaysAllow)
   },
   updater: {
-    /** 触发检查；结果与后续进度都走 onEvent 事件流（autoDownload=false） */
+    /** 触发检查；结果与后续进度都走 onEvent 事件流（autoDownload=true 自动下载） */
     check: (): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.UpdateCheck),
-    /** 用户确认后开始下载新版 */
+    /** 手动触发下载（自动下载已涵盖，保留兜底） */
     download: (): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.UpdateDownload),
     /** 下载就绪后退出并以新包重装、重启 */
     install: (): Promise<void> => ipcRenderer.invoke(IPC_CHANNELS.UpdateInstall),
+    /** 查询最近一次更新事件快照（窗口重载后恢复状态） */
+    status: (): Promise<UpdateEvent | null> => ipcRenderer.invoke(IPC_CHANNELS.UpdateStatus),
     /** 订阅更新事件流；返回取消订阅函数 */
     onEvent: (cb: (event: UpdateEvent) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, payload: UpdateEvent): void => cb(payload)

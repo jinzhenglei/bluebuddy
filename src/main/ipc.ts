@@ -40,7 +40,7 @@ import { MsHubClient } from './mcp/hub'
 import { HubTokenStore } from './mcp/token'
 import { AgentEvent, LlmCallFn, runAgentTurn } from './agent/engine'
 import { chatOnce, streamChat, testConnection, GatewayEvent } from './llm/gateway'
-import { checkUpdate, downloadUpdate, installUpdate } from './updater'
+import { checkUpdate, downloadUpdate, installUpdate, getUpdateStatus } from './updater'
 import { detectIdes, defaultProbes, openFolderInIde } from './apps'
 
 /** 平台级默认人设（对所有会话生效；用户不感知“选智能体”）。技能轻量索引会拼在其后。 */
@@ -600,18 +600,16 @@ export function registerIpcHandlers(deps: IpcDeps): void {
   })
 
   // ---------- 自动更新（阶段 7）----------
-  // 事件不回直接 return，而是把 autoUpdater 回调通过 UpdateEvent 推回发起者；
-  // UI 先 check，收到 available 后由用户确认再 download，downloaded 后 install 重启。
+  // 事件由 updater 内部广播给所有窗口（autoDownload=true 自动下载）；
+  // 启动后自动检查，下载就绪后 UI 在左下角菜单提示「安装更新」，install 后重启覆盖安装。
 
-  ipcMain.handle(IPC_CHANNELS.UpdateCheck, (event) =>
-    checkUpdate((e) => event.sender.send(IPC_CHANNELS.UpdateEvent, e))
-  )
+  ipcMain.handle(IPC_CHANNELS.UpdateCheck, () => checkUpdate())
 
-  ipcMain.handle(IPC_CHANNELS.UpdateDownload, (event) =>
-    downloadUpdate((e) => event.sender.send(IPC_CHANNELS.UpdateEvent, e))
-  )
+  ipcMain.handle(IPC_CHANNELS.UpdateDownload, () => downloadUpdate())
 
   ipcMain.handle(IPC_CHANNELS.UpdateInstall, () => installUpdate())
+
+  ipcMain.handle(IPC_CHANNELS.UpdateStatus, () => getUpdateStatus())
 
   // ---------- Agent 循环 ----------
 
